@@ -6,11 +6,16 @@ use std::{
 use vrg::doctor::{CheckStatus, inspect};
 
 fn fixture() -> PathBuf {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let sequence = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let root = std::env::temp_dir().join(format!("vrg-doctor-{}-{nonce}", std::process::id()));
+    let root = std::env::temp_dir().join(format!(
+        "vrg-doctor-{}-{nonce}-{sequence}",
+        std::process::id()
+    ));
     fs::create_dir(&root).unwrap();
     root
 }

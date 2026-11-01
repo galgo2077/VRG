@@ -15,8 +15,10 @@ use std::{
 };
 
 fn fixture() -> std::path::PathBuf {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let sequence = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let path = std::env::temp_dir().canonicalize().unwrap().join(format!(
-        "vrg-runtime-test-{}-{}",
+        "vrg-runtime-test-{}-{}-{sequence}",
         std::process::id(),
         SystemTime::now()
             .duration_since(UNIX_EPOCH)

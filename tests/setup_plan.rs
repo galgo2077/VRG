@@ -6,8 +6,10 @@ use std::{
 use vrg::setup::{FilePlan, PlannedFile, SetupOptions, plan_setup, recover_transaction};
 
 fn fixture() -> PathBuf {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let sequence = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let p = std::env::temp_dir().join(format!(
-        "vrg-setup-test-{}-{}",
+        "vrg-setup-test-{}-{}-{sequence}",
         std::process::id(),
         SystemTime::now()
             .duration_since(UNIX_EPOCH)

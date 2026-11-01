@@ -243,7 +243,12 @@ fn install_runtime_with_curl(
         .duration_since(UNIX_EPOCH)
         .map_err(|e| invalid(e.to_string()))?
         .as_nanos();
-    let stage_path = parent.join(format!(".vrg-runtime-{}-{stamp}", std::process::id()));
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let sequence = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let stage_path = parent.join(format!(
+        ".vrg-runtime-{}-{stamp}-{sequence}",
+        std::process::id()
+    ));
     let mut opts = OpenOptions::new();
     opts.write(true).create_new(true);
     #[cfg(unix)]
