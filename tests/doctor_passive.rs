@@ -283,3 +283,54 @@ fn intel_setup_checks_runtime_before_model_download_or_writes() {
     assert!(!root.join("data").exists());
     fs::remove_dir_all(root).unwrap();
 }
+
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+#[test]
+fn intel_setup_rejects_runtime_without_api_24_without_panicking() {
+    let root = fixture();
+    let project = root.join("project");
+    let notes = root.join("notes");
+    let model = root.join("model");
+    let bin_dir = root.join("bin");
+    for dir in [&project, &notes, &model, &bin_dir] {
+        fs::create_dir(dir).unwrap();
+    }
+    let executable = bin_dir.join("vrg");
+    fs::copy(env!("CARGO_BIN_EXE_vrg"), &executable).unwrap();
+    let fake_source = root.join("fake.c");
+    fs::write(&fake_source, r#"
+        #include <stddef.h>
+        typedef struct { const void *(*GetApi)(unsigned); const char *(*GetVersionString)(void); } Base;
+        static const void *get_api(unsigned n) { (void)n; return NULL; }
+        static const char *get_version(void) { return "1.24.1"; }
+        const Base *OrtGetApiBase(void) { static const Base b = { get_api, get_version }; return &b; }
+    "#).unwrap();
+    let library = bin_dir.join("libonnxruntime.dylib");
+    let compiled = std::process::Command::new("cc")
+        .args(["-dynamiclib", "-o"])
+        .arg(&library)
+        .arg(&fake_source)
+        .status()
+        .unwrap();
+    assert!(compiled.success());
+    let output = std::process::Command::new(&executable)
+        .env("HOME", &root)
+        .env("XDG_CONFIG_HOME", root.join("config"))
+        .env("XDG_DATA_HOME", root.join("data"))
+        .env_remove("VRG_CONFIG")
+        .env_remove("VRG_DATA_DIR")
+        .args(["setup", "--project"])
+        .arg(&project)
+        .arg("--root")
+        .arg(&notes)
+        .args(["--cli-only", "--model-dir"])
+        .arg(&model)
+        .args(["--non-interactive", "--yes"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("does not implement API 24"));
+    assert!(!root.join("config").exists());
+    assert!(!root.join("data").exists());
+    fs::remove_dir_all(root).unwrap();
+}

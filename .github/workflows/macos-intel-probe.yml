@@ -25,6 +25,8 @@ jobs:
         run: cargo +1.98.0 test --release --locked --offline --target x86_64-apple-darwin --lib macos_intel_runtime_tests
       - name: Verify setup preflights runtime before download
         run: cargo +1.98.0 test --release --locked --offline --target x86_64-apple-darwin --test doctor_passive intel_setup_checks_runtime_before_model_download_or_writes
+      - name: Reject a versioned runtime without API 24
+        run: cargo +1.98.0 test --release --locked --offline --target x86_64-apple-darwin --test doctor_passive intel_setup_rejects_runtime_without_api_24_without_panicking
       - name: Exercise text-mode distribution outside checkout
         shell: bash
         run: |

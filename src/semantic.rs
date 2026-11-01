@@ -63,15 +63,29 @@ fn initialize_macos_intel_runtime(path: &Path) -> VrgResult<()> {
             "ONNX Runtime must be a regular non-symlink library beside the executable".into(),
         ));
     }
-    // ort validates its API version while loading. Convert its exceptional initialization
-    // paths to an ordinary semantic-unavailable result rather than aborting the caller.
+    // Inspect the public ONNX Runtime C API before initializing ort: merely loading
+    // a library and reading its version string does not prove GetApi(24) exists.
+    // SAFETY: the library is explicitly selected by the user/distribution and the
+    // symbol signature and API-base layout are defined by ONNX Runtime's C ABI.
+    let library = unsafe { libloading::Library::new(path) }.map_err(|error| {
+        VrgError::SemanticUnavailable(format!("ONNX Runtime could not be loaded: {error}"))
+    })?;
+    unsafe {
+        let getter = library
+            .get::<unsafe extern "C" fn() -> *const ort::sys::OrtApiBase>(b"OrtGetApiBase\0")
+            .map_err(|_| {
+                VrgError::SemanticUnavailable("ONNX Runtime does not export OrtGetApiBase".into())
+            })?;
+        let base = getter();
+        if base.is_null() || ((*base).GetApi)(24).is_null() {
+            return Err(VrgError::SemanticUnavailable(
+                "ONNX Runtime does not implement API 24".into(),
+            ));
+        }
+    }
+    // ort performs its own version validation and holds its own library handle.
     std::panic::catch_unwind(|| ort::init_from(path).map(|_| ()))
-        .map_err(|_| {
-            VrgError::SemanticUnavailable(
-                "ONNX Runtime initialization failed; verify the library and API compatibility"
-                    .into(),
-            )
-        })?
+        .map_err(|_| VrgError::SemanticUnavailable("ONNX Runtime initialization failed".into()))?
         .map_err(|error| {
             VrgError::SemanticUnavailable(format!(
                 "ONNX Runtime is incompatible or could not be loaded: {error}"

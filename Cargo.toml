@@ -50,3 +50,4 @@ fastembed = "=7.5.0"
 [target.'cfg(all(target_os = "macos", target_arch = "x86_64"))'.dependencies]
 fastembed = { version = "=7.5.0", default-features = false, features = ["ort-load-dynamic"] }
 ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "api-24", "load-dynamic"] }
+libloading = "=0.9.0"

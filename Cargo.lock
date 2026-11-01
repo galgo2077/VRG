@@ -3561,6 +3561,7 @@ dependencies = [
  "clap",
  "fastembed",
  "hex",
+ "libloading",
  "notify",
  "ort",
  "pulldown-cmark",
