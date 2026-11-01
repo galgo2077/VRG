@@ -1,106 +1,23 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#080c17">
-  <meta name="description" content="VRG — local-first knowledge retrieval for Markdown: text, semantic search, graph links and a permissioned MCP bridge to Codex.">
-  <title>VRG — Knowledge, connected.</title>
-  <link rel="stylesheet" href="./site.css">
-</head>
-<body>
-  <a class="skip-link" href="#main">Skip to content</a>
-  <div class="ambient ambient-one" aria-hidden="true"></div>
-  <div class="ambient ambient-two" aria-hidden="true"></div>
-  <header class="header">
-    <div class="shell nav">
-      <a class="brand" href="./index.html" aria-label="VRG home"><span class="brand-mark">V<span>●</span></span><span>VRG<span class="brand-dot">.</span></span></a>
-      <nav class="nav-links" aria-label="Main navigation">
-        <a href="#why">Why VRG</a>
-        <a href="./setup.html">Setup</a>
-        <a href="#architecture">Architecture</a>
-        <a href="#principles">Privacy</a>
-        <a href="./guide.html#start">Docs</a>
-      </nav>
-      <div class="nav-right">
-        <a class="lang" href="./es/index.html" lang="es" hreflang="es">ES</a>
-        <a class="nav-github" href="https://github.com/galgo2077/VRG" rel="noopener noreferrer">GitHub <span aria-hidden="true">↗</span></a>
-      </div>
-    </div>
-  </header>
-
-  <main id="main">
-    <section class="hero shell">
-      <div class="hero-copy">
-        <div class="eyebrow"><span class="pulse"></span> DOCUMENTATION + SOURCE <span class="eyebrow-dash">/</span> LOCAL-FIRST</div>
-        <h1>Knowledge,<br><em>connected.</em></h1>
-        <p class="lead">Give your assistant the context that matters. VRG is a Rust-based approach to searching Markdown, tracing relationships and recovering project knowledge—without turning your vault into a chat transcript.</p>
-        <div class="hero-actions">
-          <a class="button button-primary" href="./setup.html">Install from source <span aria-hidden="true">↗</span></a>
-          <a class="button button-secondary" href="https://github.com/galgo2077/VRG" rel="noopener noreferrer">View source <span aria-hidden="true">↗</span></a>
-        </div>
-        <p class="release-note"><span class="note-star" aria-hidden="true">✳</span> Phase 4 source and a tested Linux x86_64 archive are available. The official vrg 0.1.1 crate is published.</p>
-      </div>
-      <div class="hero-visual" aria-label="Conceptual flow: Markdown vault to retrieval, graph and Codex">
-        <div class="visual-stars" aria-hidden="true"></div>
-        <div class="visual-label">CONTEXT ENGINE <span>CONCEPT VIEW / 01</span></div>
-        <div class="visual-center">
-          <span class="halo halo-one"></span><span class="halo halo-two"></span><span class="halo halo-three"></span>
-          <div class="core-node"><span class="node-glyph">V</span><span class="node-tag">VRG</span></div>
-          <div class="satellite satellite-left"><span class="satellite-icon">≡</span><span>Markdown</span></div>
-          <div class="satellite satellite-top"><span class="satellite-icon">◈</span><span>Retrieval</span></div>
-          <div class="satellite satellite-right"><span class="satellite-icon">◎</span><span>Graph</span></div>
-          <div class="satellite satellite-bottom"><span class="satellite-icon">⌘</span><span>MCP</span></div>
-        </div>
-        <div class="visual-bottom"><span>ROOTS → INDEX → RELEVANT CONTEXT</span><span class="online-dot"></span><span>LOCAL</span></div>
-      </div>
-    </section>
-
-    <section class="stats-strip" aria-label="Project priorities">
-      <div class="shell strip-inner"><span>RUST CORE</span><span class="strip-separator">✳</span><span>MARKDOWN FIRST</span><span class="strip-separator">✳</span><span>DERIVED GRAPH</span><span class="strip-separator">✳</span><span>PERMISSIONED MCP</span></div>
-    </section>
-
-
-    <section id="setup" class="quickstart-section"><div class="shell quickstart-layout">
-      <div><p class="kicker">00 / INSTALL & TEST</p><h2>From source.<br><span>Into context.</span></h2><p>Download the published Phase 4 source, compile VRG, then verify with a synthetic Markdown root—before granting access to your actual notes.</p>
-      <div class="quickstart-meta"><span>F4 SOURCE AVAILABLE</span><span>LINUX X86_64 ASSET</span><span>RUST 1.92+</span></div><a class="button button-primary" href="./setup.html">Full setup guide ↗</a></div>
-      <div class="quickstart-terminal"><div class="terminal-dots"><i></i><i></i><i></i></div><div class="quickstart-terminal-label">SOURCE BUILD / LINUX</div><pre><code><span>git clone --branch v0.4.0-f4 --depth 1 \
-  https://github.com/galgo2077/VRG.git</span>
-<span>cd VRG</span>
-<span>cargo build --release --locked</span>
-<span>./target/release/vrg --help</span></code></pre><p>Builds locally · dependency download may be required · <a href="./setup.html#demo">safe testing steps ↗</a></p></div>
-    </div></section>
-
-    <section id="why" class="section shell">
-      <div class="section-head"><p class="kicker">01 / THE IDEA</p><h2>Less rediscovery.<br><span>More continuity.</span></h2><p>Finding prior decisions should be easier than rereading a repository or carrying an entire chat history into every new session.</p></div>
-      <div class="feature-grid">
-        <article class="feature-card featured"><div class="card-index">01 — RETRIEVE</div><div class="feature-symbol">⌕</div><h3>Find what matters.</h3><p>Text retrieval, optional local semantic search and attributable source references help narrow the context to the relevant material.</p><span class="mini-tag">RETRIEVAL</span></article>
-        <article class="feature-card"><div class="card-index">02 — CONNECT</div><div class="feature-symbol">⋈</div><h3>Trace the relationships.</h3><p>Derived links and graph neighbors make cross-note context visible without rewriting the original documents.</p><span class="mini-tag">GRAPH</span></article>
-        <article class="feature-card"><div class="card-index">03 — CONTINUE</div><div class="feature-symbol">↻</div><h3>Pick up where you left off.</h3><p>Approved, compact project documentation can preserve useful decisions instead of recording full conversations.</p><span class="mini-tag">MEMORY</span></article>
-      </div>
-    </section>
-
-    <section id="architecture" class="section architecture-section"><div class="shell">
-      <div class="section-head compact"><p class="kicker">02 / ARCHITECTURE</p><h2>Modular by design.<br><span>Local by default.</span></h2></div>
-      <div class="architecture-layout">
-        <div class="architecture-flow" aria-label="VRG conceptual data flow">
-          <div class="flow-stage"><span class="flow-number">01</span><div><strong>Approved Markdown</strong><small>Explicit roots · privacy boundaries</small></div><span class="flow-mark">↘</span></div>
-          <div class="flow-line"></div>
-          <div class="flow-stage"><span class="flow-number">02</span><div><strong>Derived knowledge index</strong><small>Revisions · text · optional vectors · links</small></div><span class="flow-mark">◈</span></div>
-          <div class="flow-line"></div>
-          <div class="flow-stage"><span class="flow-number">03</span><div><strong>Retrieval core</strong><small>Freshness · provenance · context selection</small></div><span class="flow-mark">⌕</span></div>
-          <div class="flow-line"></div>
-          <div class="flow-stage"><span class="flow-number">04</span><div><strong>Codex through MCP</strong><small>Read-only tools · separate trust decisions</small></div><span class="flow-mark">↗</span></div>
-        </div>
-        <div class="architecture-aside"><p class="aside-label">BUILT AROUND BOUNDARIES</p><h3>Your notes stay yours.</h3><p>Markdown remains editable. Derived storage stays separate. A local MCP server does not make a remote AI model local—sharing retrieved snippets requires an explicit policy decision.</p><a class="text-link" href="./guide.html#security">Explore privacy boundaries <span aria-hidden="true">↗</span></a><div class="terminal-preview" aria-label="Conceptual capability list"><div class="terminal-dots"><i></i><i></i><i></i></div><code><span class="terminal-muted">$</span> vrg concept</code><code><span class="terminal-ok">✓</span> approved roots</code><code><span class="terminal-ok">✓</span> attributed retrieval</code><code><span class="terminal-ok">✓</span> derived knowledge graph</code><code><span class="terminal-muted">→</span> Codex MCP adapter</code></div><small class="terminal-disclaimer">Illustrative flow—not command output or an installable release.</small></div>
-      </div>
-    </div></section>
-
-    <section id="principles" class="section shell"><div class="principle-layout"><div><p class="kicker">03 / PRINCIPLES</p><h2>Private by<br><span>intent.</span></h2><p class="principle-copy">Access must be deliberate. Knowledge should be selective. Original files should remain under the owner's control.</p><a class="button button-secondary" href="./guide.html#security">Security philosophy <span aria-hidden="true">↗</span></a></div><div class="principle-list"><div><span>01</span><strong>Explicit permission</strong><p>Never assume every file in a home directory is eligible for indexing.</p></div><div><span>02</span><strong>Rebuildable derivatives</strong><p>Keep indexes separate from source Markdown and preserve recovery paths.</p></div><div><span>03</span><strong>Compact knowledge</strong><p>Document verified decisions, not entire prompts, conversations or raw logs.</p></div><div><span>04</span><strong>Honest release status</strong><p>Publish only features and platforms supported by released, testable artifacts.</p></div></div></div></section>
-
-    <section class="cta-section"><div class="shell cta-inner"><div><p class="kicker">04 / WHAT'S NEXT</p><h2>A better memory<br>for real work.</h2><p>Explore the public roadmap and the original specification while the source freeze is prepared for publication.</p></div><div class="cta-buttons"><a class="button button-light" href="./guide.html#roadmap">See the roadmap <span aria-hidden="true">↗</span></a><a class="button button-outline" href="./guide.html#start">Getting started <span aria-hidden="true">↗</span></a></div></div></section>
-  </main>
-
-  <footer class="footer"><div class="shell footer-top"><a class="brand" href="./index.html"><span class="brand-mark">V<span>●</span></span><span>VRG<span class="brand-dot">.</span></span></a><p>Vault RAG Graph<br>Knowledge without the noise.</p><div class="footer-links"><a href="./setup.html">Setup</a><a href="./guide.html#security">Security</a><a href="./guide.html#roadmap">Roadmap</a><a href="https://github.com/galgo2077/VRG" rel="noopener noreferrer">GitHub ↗</a></div></div><div class="shell footer-bottom"><span>© VRG · Static site · No tracking</span><span>Made for Markdown, designed for continuity.</span></div></footer>
-</body>
-</html>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#f6f4ef"><meta name="description" content="VRG indexes approved Markdown locally with text search, optional semantic retrieval and an MCP interface. Source, documentation and Linux download are public."><title>VRG — Local knowledge for Markdown</title><link rel="icon" type="image/svg+xml" href="./assets/vrg-mark.svg"><link rel="stylesheet" href="./editorial.css"></head><body><a class="skip-link" href="#content">Skip to content</a>
+<header class="site-header"><div class="wrap header-inner"><a class="site-logo" href="./index.html" aria-label="VRG home"><img src="./assets/vrg-mark.svg" width="42" height="42" alt=""><span>VRG <small>VAULT RAG GRAPH</small></span></a>
+<nav class="main-nav" aria-label="Primary navigation"><a href="#overview">Overview</a><a href="#install">Install</a><a href="#troubleshooting">Troubleshooting</a><a href="./guide.html">Docs</a></nav>
+<div class="header-actions"><a class="lang-switch" href="./es/index.html" lang="es" hreflang="es">ES</a><a class="quiet-link" href="https://github.com/galgo2077/VRG" rel="noopener noreferrer">GitHub ↗</a></div></div></header>
+<main id="content">
+<section class="wrap banner-section" aria-labelledby="banner-label"><h2 class="sr-only" id="banner-label">VRG — Vault RAG Graph</h2><img class="brand-banner" src="./assets/vrg-banner.svg" alt="VRG — Vault RAG Graph. Local search, Markdown and linked knowledge." width="1440" height="420"></section>
+<section class="wrap introduction"><div><p class="eyeline">LOCAL-FIRST · OPEN SOURCE</p><h1>Search your notes.<br>Keep the originals.</h1></div><div class="intro-side"><p>VRG builds a local index of approved Markdown files. Search text, optionally use semantic retrieval, and navigate links without moving or rewriting your notes.</p><div class="cta-row"><a class="primary-link" href="./setup.html">Installation guide <span aria-hidden="true">↗</span></a><a class="secondary-link" href="https://github.com/galgo2077/VRG" rel="noopener noreferrer">Source code ↗</a></div><p class="small-note">Released source and Linux x86_64 archive. Other platforms are not certified.</p></div></section>
+<section id="overview" class="wrap content-section"><div class="section-top"><span class="section-index">01 / OVERVIEW</span><h2>What VRG does</h2></div><div class="three-col"><article><h3>Text and semantic search</h3><p>Full-text retrieval backed by SQLite/FTS5. Optional local embeddings can expand matching when a compatible model is installed.</p></article><article><h3>Note relationships</h3><p>Derived links connect related Markdown documents. Source files remain editable in Obsidian or any text editor.</p></article><article><h3>MCP integration</h3><p>A local, read-only MCP server exposes attributed search and source references to compatible clients, including Codex.</p></article></div></section>
+<section id="install" class="wide-panel"><div class="wrap install-layout"><div><span class="section-index">02 / INSTALLATION</span><h2>Start with the published package.</h2><p>Install the current crate, initialize a configuration, then inspect its status. Before indexing, explicitly authorize a Markdown root and choose a separate directory for derived data.</p><p class="small-note">An automated <code>vrg setup</code> / <code>vrg doctor</code> workflow is planned, not yet part of the published release.</p><div class="plain-links"><a href="./setup.html">Full setup and verification guide ↗</a><a href="https://github.com/galgo2077/VRG/releases/tag/v0.4.0-f4" rel="noopener noreferrer">Linux download and checksums ↗</a></div></div><div class="code-area"><div class="code-head"><span>TERMINAL</span><span>Linux · Cargo</span></div><pre><code>cargo install vrg --locked
+vrg init
+vrg status</code></pre><div class="code-foot">Use a synthetic test root before connecting personal notes.</div></div></div></section>
+<section class="wrap content-section" id="troubleshooting"><div class="section-top"><span class="section-index">03 / HELP</span><h2>Common issues</h2><p>Basic checks for the most frequent installation and integration problems.</p></div>
+<div class="faq-list">
+<details><summary><span>01</span><strong><code>vrg: command not found</code></strong></summary><p>Confirm that Cargo's binary directory is on your PATH (usually <code>~/.cargo/bin</code>). Reopen your shell and run <code>vrg --version</code>.</p></details>
+<details><summary><span>02</span><strong>Cargo build or installation fails</strong></summary><p>Check that Rust meets the package's minimum version and native build tools are installed. For an offline build, dependencies must already exist in the Cargo cache. Use the exact error message to identify the missing library.</p></details>
+<details><summary><span>03</span><strong>MCP tools do not appear in Codex</strong></summary><p>Review the effective project MCP configuration and absolute executable path. Start a fresh session and inspect <code>/mcp</code>; the server should expose four read-only tools.</p></details>
+<details><summary><span>04</span><strong>Hooks show modified or untrusted</strong></summary><p>Open <code>/hooks</code>, review the exact commands and approve them through Codex if appropriate. Installing VRG does not grant hook trust, and the example observer has its own portability limits.</p></details>
+<details><summary><span>05</span><strong>Index is stale or synchronization pending</strong></summary><p>Use <code>vrg status</code> to inspect the active generation and root permissions. Do not treat a stale generation as current; troubleshoot the watcher or perform a deliberate reindex.</p></details>
+<details><summary><span>06</span><strong>Semantic model unavailable</strong></summary><p>Text-only search works without a model. For semantic search, supply a compatible ONNX model and tokenizer files from a verified source; VRG does not download them by default.</p></details>
+<details><summary><span>07</span><strong>Linux executable does not start</strong></summary><p>The published x86_64 artifact has glibc/libstdc++ requirements. If your system is older or incompatible, build from source in your environment instead of replacing system libraries.</p></details>
+</div><p class="section-end"><a href="./setup.html#trouble">More troubleshooting in the installation guide ↗</a></p></section>
+<section class="wrap about-section"><div><span class="section-index">04 / PROJECT</span><h2>Made for local work.</h2><p>VRG is maintained by <a href="https://github.com/galgo2077" rel="noopener noreferrer">galgo2077</a>. Original notes remain yours; private vaults, databases, models and secrets should not be committed to public repositories.</p></div><aside class="support-box"><h3>Support development</h3><p>If you find VRG useful, you can contribute to its ongoing maintenance.</p><a class="support-link" href="https://buymeacoffee.com/galgo2077?new=1" rel="noopener noreferrer">Buy Me a Coffee ↗</a></aside></section>
+</main><footer class="site-footer"><div class="wrap footer-inner"><div class="footer-brand"><img src="./assets/vrg-mark.svg" alt="" width="42" height="42"><div><strong>VRG</strong><span>Maintained by galgo2077</span></div></div><div class="footer-nav"><a href="./setup.html">Installation</a><a href="./guide.html">Documentation</a><a href="https://crates.io/crates/vrg" rel="noopener noreferrer">crates.io</a><a href="https://buymeacoffee.com/galgo2077?new=1" rel="noopener noreferrer">Support</a></div></div><div class="wrap footer-bottom"><span>© 2026 VRG · MIT / Apache-2.0</span><span>No analytics or tracking</span></div></footer></body></html>
