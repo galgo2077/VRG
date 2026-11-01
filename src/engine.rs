@@ -74,10 +74,12 @@ impl VrgEngine {
         }
 
         let (embedder, semantic_status) = match &config.semantic_model {
-            Some(model_config) => match LocalEmbedder::load(model_config) {
-                Ok(embedder) => (Some(embedder), ModuleStatus::Ready),
-                Err(error) => (None, ModuleStatus::Degraded(error.to_string())),
-            },
+            Some(model_config) => {
+                match LocalEmbedder::load_with_data_dir(model_config, Some(&config.data_dir)) {
+                    Ok(embedder) => (Some(embedder), ModuleStatus::Ready),
+                    Err(error) => (None, ModuleStatus::Degraded(error.to_string())),
+                }
+            }
             None => (
                 None,
                 ModuleStatus::Degraded("no local semantic model is configured".into()),

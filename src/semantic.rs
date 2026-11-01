@@ -30,24 +30,35 @@ pub struct SemanticMatch {
     pub score: f32,
 }
 
-/// Runtime path is stable beside the installed executable, independent of the checkout.
-/// No Intel macOS runtime is currently distributed or certified by VRG.
+/// Resolve the packaged runtime first, then a verified resource in the active profile.
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-pub(crate) fn macos_intel_runtime_path() -> VrgResult<std::path::PathBuf> {
+pub(crate) fn macos_intel_runtime_path(data_dir: Option<&Path>) -> VrgResult<std::path::PathBuf> {
     let executable = std::env::current_exe().map_err(|_| {
         VrgError::SemanticUnavailable("cannot identify the installed executable".into())
     })?;
     let directory = executable.parent().ok_or_else(|| {
         VrgError::SemanticUnavailable("installed executable has no parent directory".into())
     })?;
-    Ok(directory.join("libonnxruntime.dylib"))
+    let packaged = directory.join("libonnxruntime.dylib");
+    if fs::symlink_metadata(&packaged)
+        .is_ok_and(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
+    {
+        return Ok(packaged);
+    }
+    if let Some(root) = data_dir {
+        let cache = root.join("resources/onnxruntime");
+        if let Some(runtime) = crate::onnx_source_setup::find_cached(&cache)? {
+            return Ok(runtime.path);
+        }
+    }
+    Ok(packaged)
 }
 
 /// Verify the installed runtime before any optional model download or setup writes.
 /// This only loads the library; it does not download or create files.
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-pub(crate) fn preflight_macos_intel_runtime() -> VrgResult<()> {
-    initialize_macos_intel_runtime(&macos_intel_runtime_path()?)
+pub(crate) fn preflight_macos_intel_runtime(data_dir: Option<&Path>) -> VrgResult<()> {
+    initialize_macos_intel_runtime(&macos_intel_runtime_path(data_dir)?)
 }
 
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
@@ -101,6 +112,16 @@ impl LocalEmbedder {
     /// The model directory and each file must be regular non-symlink entries.
     /// No network lookup, implicit cache fallback, or model download occurs.
     pub fn load(config: &SemanticModelConfig) -> VrgResult<Self> {
+        Self::load_with_data_dir(config, None)
+    }
+
+    /// Use the active profile to locate its private runtime on macOS Intel.
+    pub(crate) fn load_with_data_dir(
+        config: &SemanticModelConfig,
+        data_dir: Option<&Path>,
+    ) -> VrgResult<Self> {
+        #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+        let _ = data_dir;
         if config.model_id != SUPPORTED_MODEL_ID {
             return Err(VrgError::SemanticUnavailable(format!(
                 "unsupported local model {}; supported model is {SUPPORTED_MODEL_ID}",
@@ -118,7 +139,7 @@ impl LocalEmbedder {
             ));
         }
         #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-        preflight_macos_intel_runtime()?;
+        preflight_macos_intel_runtime(data_dir)?;
 
         let root_metadata = fs::symlink_metadata(&config.model_dir).map_err(|error| {
             VrgError::SemanticUnavailable(format!(

@@ -9,11 +9,10 @@ use clap::{Args, Parser, Subcommand};
 use serde::Serialize;
 
 use crate::{
-    VrgEngine,
     config::VrgConfig,
     contracts::{RuntimeIdentity, RuntimeRootIdentity, SearchRequest, SourceRef},
     error::{VrgError, VrgResult},
-    mcp_server,
+    mcp_server, VrgEngine,
 };
 
 const MAX_QUERY_BYTES: usize = 16 * 1024;
@@ -137,6 +136,9 @@ struct SetupArgs {
     /// Prohibit network access.
     #[arg(long)]
     offline: bool,
+    /// Consent to build ONNX Runtime from pinned official sources on macOS Intel.
+    #[arg(long)]
+    build_onnx_runtime: bool,
 }
 
 #[derive(Debug, Args)]
@@ -519,6 +521,12 @@ fn find_program(name: &str) -> Option<PathBuf> {
 
 fn run_setup(explicit_config: Option<PathBuf>, mut args: SetupArgs) -> VrgResult<()> {
     crate::setup::ensure_supported_platform()?;
+    #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+    if args.build_onnx_runtime {
+        return Err(VrgError::InvalidConfig(
+            "--build-onnx-runtime is only available on macOS Intel".into(),
+        ));
+    }
     let interactive = !args.non_interactive && io::stdin().is_terminal();
     if let Some(backup) = args.recover.take() {
         let backup = absolute(backup)?;
@@ -672,9 +680,12 @@ fn run_setup(explicit_config: Option<PathBuf>, mut args: SetupArgs) -> VrgResult
         None => download.clone(),
     };
     if args.offline && download.as_ref().is_some_and(|path| !path.exists()) {
+        #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
         return Err(VrgError::InvalidConfig(
             "--offline prohibits model download".into(),
         ));
+        #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+        eprintln!("Offline mode cannot download the model; setup will retain text-only mode if it is unavailable.");
     }
     println!(
         "Environment: {} / {}; executable: {}",
@@ -751,7 +762,7 @@ fn run_setup(explicit_config: Option<PathBuf>, mut args: SetupArgs) -> VrgResult
             }
         }
     }
-    let options = crate::setup::SetupOptions {
+    let mut options = crate::setup::SetupOptions {
         project,
         roots,
         config_path,
@@ -760,7 +771,17 @@ fn run_setup(explicit_config: Option<PathBuf>, mut args: SetupArgs) -> VrgResult
         memory_dir,
         synthetic_root: args.synthetic,
     };
-    let plan = crate::setup::plan_setup(&options, extra)?;
+    let mut plan = crate::setup::plan_setup(&options, extra.clone())?;
+    // Capture both plans before a potentially long native build, so a later
+    // fallback cannot silently accept external changes made during that build.
+    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    let text_plan = if options.model_dir.is_some() {
+        let mut text_options = options.clone();
+        text_options.model_dir = None;
+        Some(crate::setup::plan_setup(&text_options, extra.clone()))
+    } else {
+        None
+    };
     println!(
         "VRG setup plan: {} file(s); no indexing; offline={}",
         plan.changes().len(),
@@ -787,6 +808,16 @@ fn run_setup(explicit_config: Option<PathBuf>, mut args: SetupArgs) -> VrgResult
         println!("  Authorized source: {}", root.display());
     }
     println!("  Derived data: {}", options.data_dir.display());
+    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    if options.model_dir.is_some() {
+        println!("  Intel runtime: reuse the packaged or verified profile runtime; if unavailable, building official ONNX Runtime 1.24.1 requires separate consent, network, Git, CMake 3.28+, Python 3.10+ and the Xcode command-line tools.");
+        if args.build_onnx_runtime {
+            println!(
+                "  Runtime source build is authorized; cache: {}",
+                data_dir.join("resources/onnxruntime").display()
+            );
+        }
+    }
     if let Some(memory) = &options.memory_dir {
         println!("  Authorized operational memory: {}", memory.display());
     }
@@ -813,26 +844,66 @@ fn run_setup(explicit_config: Option<PathBuf>, mut args: SetupArgs) -> VrgResult
             return Err(VrgError::InvalidConfig("plan was not confirmed".into()));
         }
     }
+    let prepare_semantic = (|| -> VrgResult<()> {
+        #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+        if options.model_dir.is_some()
+            && crate::semantic::preflight_macos_intel_runtime(Some(&data_dir)).is_err()
+        {
+            let consent = args.build_onnx_runtime || (!args.offline && interactive
+                && ask("Build ONNX Runtime 1.24.1 from pinned official sources? This downloads source and dependencies and requires developer tools. [y/N] ")?.eq_ignore_ascii_case("y"));
+            if !consent {
+                return Err(VrgError::SemanticUnavailable("ONNX Runtime unavailable; use --build-onnx-runtime to consent to an official source build".into()));
+            }
+            if args.offline {
+                return Err(VrgError::SemanticUnavailable(
+                    "offline mode prohibits downloading ONNX Runtime sources".into(),
+                ));
+            }
+            let cache = data_dir.join("resources/onnxruntime");
+            crate::setup::private_dirs(&cache)?;
+            crate::onnx_source_setup::prepare(
+                &cache,
+                consent,
+                args.offline,
+                &crate::runtime_probe::probe_in_child,
+            )?;
+            crate::semantic::preflight_macos_intel_runtime(Some(&data_dir))?;
+        }
+        if let Some(path) = &download {
+            let parent = path
+                .parent()
+                .ok_or_else(|| VrgError::InvalidConfig("model has no parent".into()))?;
+            crate::setup::private_dirs(parent)?;
+            crate::model_setup::download_model(path, true, args.offline)?;
+        }
+        if let Some(path) = &options.model_dir {
+            let model = crate::config::SemanticModelConfig {
+                model_id: "intfloat/multilingual-e5-small".into(),
+                model_dir: path.clone(),
+                threads: 4,
+                max_length: 512,
+            };
+            let embedder =
+                crate::semantic::LocalEmbedder::load_with_data_dir(&model, Some(&data_dir))?;
+            // Actual local inference, not merely library discovery or ABI inspection.
+            embedder.embed_query("synthetic runtime verification")?;
+        }
+        Ok(())
+    })();
     #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-    if options.model_dir.is_some() {
-        crate::semantic::preflight_macos_intel_runtime()?;
+    if let Err(error) = prepare_semantic {
+        eprintln!("Intel semantic search remains pending: {error}. Attempting the preplanned text-only fallback.");
+        options.model_dir = None;
+        plan = text_plan.ok_or_else(|| {
+            VrgError::InvalidConfig("text-only fallback was not planned".into())
+        })??;
+        println!(
+            "Revised plan: text-only; {} file(s), no additional source access.",
+            plan.changes().len()
+        );
     }
-    if let Some(path) = &download {
-        let parent = path
-            .parent()
-            .ok_or_else(|| VrgError::InvalidConfig("model has no parent".into()))?;
-        crate::setup::private_dirs(parent)?;
-        crate::model_setup::download_model(path, true, args.offline)?;
-    }
-    if let Some(path) = &options.model_dir {
-        let model = crate::config::SemanticModelConfig {
-            model_id: "intfloat/multilingual-e5-small".into(),
-            model_dir: path.clone(),
-            threads: 4,
-            max_length: 512,
-        };
-        crate::semantic::LocalEmbedder::load(&model)?;
-    }
+    #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+    prepare_semantic?;
     let result = plan.apply(
         &data_dir.join("setup-backups"),
         &options.project,
