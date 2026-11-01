@@ -43,6 +43,12 @@ cargo install vrg --locked
 vrg --version
 ```
 
+## Assistant compatibility and support
+
+For now, **Codex is the only officially supported AI assistant integration**, through VRG's read-only MCP interface and reviewed hooks. The local CLI can be used without Codex. Other assistants and MCP clients are not officially supported or validated yet.
+
+**Buy Me a Coffee:** [Support VRG and galgo2077](https://buymeacoffee.com/galgo2077?new=1). This is an external site for voluntary contributions toward maintenance, documentation and further development. VRG remains free and open source; no donation is needed to download or use it.
+
 ## Installation help
 
 See the [common issues section](https://galgo2077.github.io/VRG/#troubleshooting) for Cargo dependencies, PATH, MCP configuration, hook trust, synchronization, model files and Linux compatibility. More detailed instructions are in [the setup guide](docs/public/SETUP.md) and [la guía en español](docs/public/SETUP.es.md).

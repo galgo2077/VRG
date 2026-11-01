@@ -36,7 +36,7 @@ EOF
 ./target/release/vrg --config "$DEMO_CFG" index
 ./target/release/vrg --config "$DEMO_CFG" search "zafiro compass" --root demo --text-only</code></pre>
 <p>Expect an attributed hit from <code>demo.md</code>, without modifying the source. The semantic model is optional: text-only search works without downloading model files. Use only synthetic files for rollback or destructive recovery tests.</p></section>
-<section class="docs-section" id="codex"><p class="kicker">03 / READ-ONLY MCP</p><h2>Connect to Codex.</h2><p>Make an isolated project-level <code>.codex/config.toml</code> and use your own absolute paths. Do not paste this placeholder config unchanged.</p>
+<section class="docs-section" id="codex"><p class="kicker">03 / READ-ONLY MCP</p><h2>Connect to Codex.</h2><p><strong>Compatibility:</strong> for now, Codex is the only officially supported AI assistant integration. Other MCP-capable AI clients are not officially supported or validated. VRG also works independently from the command line.</p><p>Make an isolated project-level <code>.codex/config.toml</code> and use your own absolute paths. Do not paste this placeholder config unchanged.</p>
 <pre class="setup-terminal"><code>[mcp_servers.vrg]
 command = "/absolute/path/to/VRG/target/release/vrg"
 args = ["--config", "/absolute/path/to/demo.toml", "mcp", "serve"]
