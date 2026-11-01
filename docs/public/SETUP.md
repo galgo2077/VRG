@@ -10,7 +10,7 @@
 
 Install:
 - Git.
-- Rust **1.89 or newer**, with Cargo. Use [rustup](https://rustup.rs) or the official [Rust installation guide](https://www.rust-lang.org/tools/install).
+- Rust **1.92 or newer**, with Cargo. Use [rustup](https://rustup.rs) or the official [Rust installation guide](https://www.rust-lang.org/tools/install).
 - A C/C++ build toolchain, `make` and `pkg-config` if demanded by the locked dependency build.
 
 Check:

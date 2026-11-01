@@ -6,9 +6,13 @@ members = ["."]
 name = "vrg"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.89"
+rust-version = "1.92"
 description = "Local-first Vault RAG Graph backend"
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/galgo2077/VRG"
+homepage = "https://galgo2077.github.io/VRG/"
+readme = "README.md"
+include = ["src/**", "tests/**", "scripts/**", "examples/**", "docs/**", "README.md", "LICENSE-*", "Cargo.toml", "Cargo.lock"]
 
 [lib]
 path = "src/lib.rs"

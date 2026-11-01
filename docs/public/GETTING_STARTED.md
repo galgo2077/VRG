@@ -8,7 +8,7 @@ The complete source is published in [VRG F4 v0.4.0-f4](https://github.com/galgo2
 - [Detailed maintainer/operator manual](../PUBLIC_INSTALL.md)
 - [Privacy and data boundaries](SECURITY.md)
 
-Quick release source build (Rust 1.89+, Cargo, Git; build-time dependencies may require network):
+Quick release source build (Rust 1.92+, Cargo, Git; build-time dependencies may require network):
 
 ```sh
 git clone --branch v0.4.0-f4 --depth 1 https://github.com/galgo2077/VRG.git

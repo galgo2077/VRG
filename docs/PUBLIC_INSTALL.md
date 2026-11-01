@@ -22,7 +22,7 @@ These instructions describe a local deployment. Void Linux is the validated envi
 
 ## Requirements and build
 
-- Rust 1.89 or newer and Cargo, with the locked dependencies already available for an offline build.
+- Rust 1.92 or newer and Cargo, with the locked dependencies already available for an offline build.
 - A local directory for rebuildable derived state, outside the repository and source roots.
 - At least one explicitly authorized Markdown root if you intend to index notes.
 - Optional local model files for semantic retrieval. VRG supports `intfloat/multilingual-e5-small` as a user-supplied model; it does not fetch it automatically. The model directory must contain `model.onnx`, `tokenizer.json`, `config.json`, `special_tokens_map.json`, and `tokenizer_config.json` as regular files.

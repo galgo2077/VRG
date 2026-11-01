@@ -9,7 +9,7 @@
 Linux es la ruta documentada; Void Linux es el entorno local donde se realizaron las validaciones comunicadas. Instala:
 
 - Git.
-- Rust **1.89 o superior** y Cargo mediante [rustup](https://rustup.rs) o la [guía oficial de Rust](https://www.rust-lang.org/tools/install).
+- Rust **1.92 o superior** y Cargo mediante [rustup](https://rustup.rs) o la [guía oficial de Rust](https://www.rust-lang.org/tools/install).
 - Compilador C/C++, `make` y `pkg-config` cuando los requieran las dependencias.
 
 ```sh
