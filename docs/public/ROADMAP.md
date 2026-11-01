@@ -5,7 +5,7 @@
 ## Current distribution
 - **Build from source:** [English guide](SETUP.md) / [Guía en español](SETUP.es.md).
 - A Linux x86_64 archive is attached to v0.4.0-f4; it was tested on Void Linux only.
-- The official [vrg 0.1.0 crate](https://crates.io/crates/vrg/0.1.0) is published; clean installation verification is in progress.
+- The official [vrg 0.1.0 crate](https://crates.io/crates/vrg/0.1.0) is published; version 0.1.0 was installed and smoke-tested on Void Linux x86_64.
 - **Version labels:** Cargo `0.1.0`, milestone tag `v0.4.0-f4`. A later semantic-versioned distribution decision is needed.
 
 ## Next validation gates
@@ -14,6 +14,6 @@
 3. Verify Linux release artifacts on additional environments before broadening compatibility claims.
 4. Maintain the GitHub Pages deployment and verify future changes.
 5. Assess macOS and Windows support separately; do not imply certification without tests.
-6. Verify clean installation from the published crates.io package.
+6. Reproduce crates.io installation on additional environments before broadening support claims.
 
 Private vaults, derived SQLite, embeddings, model files, credentials and hook trust state never belong in the public source release.
