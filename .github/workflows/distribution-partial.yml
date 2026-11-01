@@ -79,7 +79,7 @@ jobs:
           test "$("$RUNNER_TEMP/vrg-package/vrg" --version)" = "vrg $expected"
           "$RUNNER_TEMP/vrg-package/vrg" --help >/dev/null
           cd "$RUNNER_TEMP"
-          python3 "$GITHUB_WORKSPACE/scripts/ci_distribution_smoke.py" "$RUNNER_TEMP/vrg-package/vrg"
+          python3 "$GITHUB_WORKSPACE/scripts/ci_distribution_smoke.py" "$RUNNER_TEMP/vrg-package/vrg" --without-memory
       - uses: actions/download-artifact@v4
         with:
           name: partial-pinned-e5-fixture
@@ -93,7 +93,7 @@ jobs:
           version=$(cargo +1.98.0 metadata --locked --offline --no-deps --format-version 1 | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(p["version"] for p in d["packages"] if p["name"] == "vrg"))')
           stage="$RUNNER_TEMP/vrg-package"
           cp LICENSE-* README.md "$stage/"
-          printf '%s\n' 'Text retrieval: tested.' 'E5 semantic retrieval: tested with a pinned local fixture.' 'Real Codex integration: not certified by this workflow.' > "$stage/CAPABILITIES.txt"
+          printf '%s\n' 'Text retrieval: tested.' 'E5 semantic retrieval: tested with a pinned local fixture.' 'Hook setup and supervisor repair: not tested; operational memory was not configured.' 'Real Codex integration: not certified by this workflow.' > "$stage/CAPABILITIES.txt"
           {
             printf 'commit=%s\n' "$GITHUB_SHA"
             printf 'runner=%s\n' "$RUNNER_OS"
@@ -148,7 +148,7 @@ jobs:
           test "$("$RUNNER_TEMP/vrg-package/vrg" --version)" = "vrg $expected"
           "$RUNNER_TEMP/vrg-package/vrg" --help >/dev/null
           cd "$RUNNER_TEMP"
-          python3 "$GITHUB_WORKSPACE/scripts/ci_distribution_smoke.py" "$RUNNER_TEMP/vrg-package/vrg"
+          python3 "$GITHUB_WORKSPACE/scripts/ci_distribution_smoke.py" "$RUNNER_TEMP/vrg-package/vrg" --without-memory
       - name: Package explicitly text-only candidate
         shell: bash
         run: |
@@ -156,7 +156,7 @@ jobs:
           version=$(cargo +1.98.0 metadata --locked --offline --no-deps --format-version 1 | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(p["version"] for p in d["packages"] if p["name"] == "vrg"))')
           stage="$RUNNER_TEMP/vrg-package"
           cp LICENSE-* README.md "$stage/"
-          printf '%s\n' 'Text retrieval: tested.' 'Intel semantic retrieval: not certified; no ONNX runtime is included.' 'Real Codex integration: not certified by this workflow.' > "$stage/CAPABILITIES.txt"
+          printf '%s\n' 'Text retrieval: tested.' 'Intel semantic retrieval: not certified; no ONNX runtime is included.' 'Hook setup and supervisor repair: not tested; operational memory was not configured.' 'Real Codex integration: not certified by this workflow.' > "$stage/CAPABILITIES.txt"
           {
             printf 'commit=%s\n' "$GITHUB_SHA"
             printf 'platform='; uname -smr

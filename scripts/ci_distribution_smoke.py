@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Exercise a distribution binary using disposable synthetic data only."""
+import argparse
 import hashlib
 import json
 import os
@@ -8,7 +9,12 @@ import subprocess
 import sys
 import tempfile
 
-binary = Path(sys.argv[1]).resolve(strict=True)
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('binary')
+parser.add_argument('--without-memory', action='store_true',
+                    help='Do not authorize or create operational memory; skip hook-resource repair')
+args = parser.parse_args()
+binary = Path(args.binary).resolve(strict=True)
 
 
 def snapshot(root):
@@ -48,8 +54,10 @@ with tempfile.TemporaryDirectory(prefix='vrg-distribution-') as tmp:
     run('setup', '--help')
     run('doctor', '--help')
     setup = ('setup', '--project', str(project), '--synthetic', '--data-dir', str(data),
-             '--text-only', '--codex', '--allow-remote-context', '--memory-dir',
-             str(project / 'memory'), '--non-interactive', '--yes', '--offline')
+             '--text-only', '--codex', '--allow-remote-context')
+    if not args.without_memory:
+        setup += ('--memory-dir', str(project / 'memory'))
+    setup += ('--non-interactive', '--yes', '--offline')
     before = snapshot(base)
     run(*setup, '--dry-run')
     assert snapshot(base) == before, 'setup dry-run modified files'
@@ -66,25 +74,32 @@ with tempfile.TemporaryDirectory(prefix='vrg-distribution-') as tmp:
     run('doctor', '--fix')
     assert snapshot(base) == configured, 'healthy doctor fix modified files'
     observer = data / 'resources' / 'vrg-hook-observer-v1.py'
-    hooks = project / '.codex' / 'hooks.json'
-    codex_config = project / '.codex' / 'config.toml'
-    assert observer.is_file() and hooks.is_file() and codex_config.is_file()
-    retained = {f: hashlib.sha256(f.read_bytes()).hexdigest() for f in (hooks, codex_config)}
-    observer_hash = hashlib.sha256(observer.read_bytes()).hexdigest()
-    observer.unlink()
-    run('doctor', '--fix', '--dry-run', allowed=(2,))
-    assert not observer.exists(), 'repair dry-run restored a resource'
-    run('doctor', '--fix')
-    assert hashlib.sha256(observer.read_bytes()).hexdigest() == observer_hash
-    assert all(hashlib.sha256(f.read_bytes()).hexdigest() == h for f, h in retained.items())
-    healed = snapshot(base)
-    run('doctor', '--fix')
-    assert snapshot(base) == healed, 'second repair was not a no-op'
+    if not args.without_memory:
+        hooks = project / '.codex' / 'hooks.json'
+        codex_config = project / '.codex' / 'config.toml'
+        assert observer.is_file() and hooks.is_file() and codex_config.is_file()
+        retained = {f: hashlib.sha256(f.read_bytes()).hexdigest() for f in (hooks, codex_config)}
+        observer_hash = hashlib.sha256(observer.read_bytes()).hexdigest()
+        observer.unlink()
+        run('doctor', '--fix', '--dry-run', allowed=(2,))
+        assert not observer.exists(), 'repair dry-run restored a resource'
+        run('doctor', '--fix')
+        assert hashlib.sha256(observer.read_bytes()).hexdigest() == observer_hash
+        assert all(hashlib.sha256(f.read_bytes()).hexdigest() == h for f, h in retained.items())
+        healed = snapshot(base)
+        run('doctor', '--fix')
+        assert snapshot(base) == healed, 'second repair was not a no-op'
+    else:
+        assert not observer.exists(), 'unexpected supervisor without operational memory'
+        assert not (project / 'memory').exists(), 'unexpected operational memory directory'
+        assert not any(p.name in {'STATUS.md', 'DECISIONS.md', 'SOLUTIONS.md'}
+                       for p in base.rglob('*')), 'unexpected operational memory file'
     report = json.loads(run('doctor', '--json', '--check-runtime'))
     assert report['schema_version'] == 1
     assert any(c['id'] == 'mcp_runtime' and c['status'] == 'PASS' for c in report['checks']), 'direct MCP probe did not pass'
     assert any(c['id'] == 'codex_mcp' and c['status'] == 'PASS' for c in report['checks']), 'MCP profile mismatch'
-    assert any(c['id'] == 'supervisor_resource' and c['status'] == 'PASS' for c in report['checks']), 'missing packaged hook resource'
+    if not args.without_memory:
+        assert any(c['id'] == 'supervisor_resource' and c['status'] == 'PASS' for c in report['checks']), 'missing packaged hook resource'
     assert any(c['id'] == 'codex_trust' and c['status'] == 'UNKNOWN' for c in report['checks']), 'trust must not be fabricated'
     sample = project / '.vrg-synthetic-notes' / 'sample.md'
     sample_before = hashlib.sha256(sample.read_bytes()).hexdigest()
@@ -93,4 +108,8 @@ with tempfile.TemporaryDirectory(prefix='vrg-distribution-') as tmp:
     assert 'sample.md' in json.dumps(result), 'synthetic source was not retrieved'
     assert hashlib.sha256(sample.read_bytes()).hexdigest() == sample_before
     print('PASS: synthetic setup, idempotence, dry-run, doctor, direct MCP, index and retrieval')
+    if args.without_memory:
+        assert not any(p.name in {'STATUS.md', 'DECISIONS.md', 'SOLUTIONS.md'}
+                       for p in base.rglob('*')), 'unexpected operational memory file'
+        print('Scope: no operational memory was created; hook setup and resource repair were not tested')
     print('Scope: no real Codex event or hook trust was tested')
