@@ -118,6 +118,8 @@ Verify the exact model revision, hashes, license and tokenizer compatibility bef
 
 ## 5. Connect MCP to Codex
 
+**Current assistant compatibility:** Codex only. Other AI assistants have not been officially supported or validated, even if they use MCP. VRG's local CLI can index and search independently of Codex.
+
 Start with your **synthetic config** and a project-local `.codex/config.toml`, not private vaults. Replace the placeholders with actual absolute paths:
 
 ```toml

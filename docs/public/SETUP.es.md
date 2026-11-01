@@ -113,6 +113,8 @@ Confirma revisión, hashes y licencia antes de activar `semantic_model`. La bús
 
 ## 5. MCP para Codex
 
+**Compatibilidad actual con asistentes:** solamente Codex. No hay soporte oficial ni validación para otros clientes de IA, aunque implementen MCP. La indexación y búsqueda mediante el CLI funcionan sin Codex.
+
 Empieza con datos sintéticos. Crea `.codex/config.toml` de proyecto usando rutas absolutas reales:
 
 ```toml

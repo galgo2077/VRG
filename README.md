@@ -1,5 +1,9 @@
 # VRG — Vault RAG Graph
 
+![VRG — Vault RAG Graph](docs/assets/vrg-banner.svg)
+
+**Maintained by [galgo2077](https://github.com/galgo2077)** · [Website](https://galgo2077.github.io/VRG/) · [Setup](https://galgo2077.github.io/VRG/setup.html) · [Troubleshooting](https://galgo2077.github.io/VRG/#troubleshooting) · [Support development](https://buymeacoffee.com/galgo2077?new=1)
+
 VRG is a local-first Rust backend for retrieving information from explicitly authorized Markdown roots. It combines SQLite/FTS5 text search, optional local embeddings, and a graph of explicit note relations. The original notes remain authoritative; indexes, vectors, and graph data are rebuildable derived state.
 
 The CLI and a local stdio Model Context Protocol (MCP) server expose attributed results with source revisions and freshness information. Codex integration can use project hooks to reconcile approved roots and check selective operational documentation at the end of a turn. MCP tools remain read-only: the assistant uses normal file tools for any separately authorized documentation edits.
@@ -44,6 +48,16 @@ vrg --version
 ## Setup and doctor under development
 
 The next release is being developed with `vrg setup` and `vrg doctor`; these commands are **not available in the published 0.1.1 crate or the F4 binary**. Their behavior and release remain subject to validation. The current installation instructions above still apply. Candidate syntax, authorization boundaries and recovery are described in the [English guide](docs/public/SETUP.md#candidate-workflow-development-builds-only) and [guía en español](docs/public/SETUP.es.md#flujo-candidato-solo-compilaciones-de-desarrollo).
+
+## Assistant compatibility and support
+
+For now, **Codex is the only officially supported AI assistant integration**, through VRG's read-only MCP interface and reviewed hooks. The local CLI can be used without Codex. Other assistants and MCP clients are not officially supported or validated yet.
+
+**Buy Me a Coffee:** [Support VRG and galgo2077](https://buymeacoffee.com/galgo2077?new=1). This is an external site for voluntary contributions toward maintenance, documentation and further development. VRG remains free and open source; no donation is needed to download or use it.
+
+## Installation help
+
+See the [common issues section](https://galgo2077.github.io/VRG/#troubleshooting) for Cargo dependencies, PATH, MCP configuration, hook trust, synchronization, model files and Linux compatibility. More detailed instructions are in [the setup guide](docs/public/SETUP.md) and [la guía en español](docs/public/SETUP.es.md).
 
 ## Privacy and operational boundaries
 
