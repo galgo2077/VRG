@@ -2332,27 +2332,37 @@ fn retained_source_revisions_connection(
 }
 
 fn storage_stats_connection(connection: &Connection, directory: &Path) -> VrgResult<StorageStats> {
+    let nonnegative = |value: i64| -> VrgResult<u64> {
+        u64::try_from(value)
+            .map_err(|_| VrgError::Storage("negative SQLite storage statistic".into()))
+    };
     let count = |table: &str| -> VrgResult<u64> {
-        connection
+        let value: i64 = connection
             .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
-            .map_err(storage_error)
+            .map_err(storage_error)?;
+        nonnegative(value)
     };
     let sum = |sql: &str| -> VrgResult<u64> {
-        connection
+        let value: i64 = connection
             .query_row(sql, [], |r| r.get(0))
-            .map_err(storage_error)
+            .map_err(storage_error)?;
+        nonnegative(value)
     };
     let size = |name: &str| {
         fs::metadata(directory.join(name))
             .map(|m| m.len())
             .unwrap_or(0)
     };
-    let page_size: u64 = connection
-        .pragma_query_value(None, "page_size", |r| r.get(0))
-        .map_err(storage_error)?;
-    let free: u64 = connection
-        .pragma_query_value(None, "freelist_count", |r| r.get(0))
-        .map_err(storage_error)?;
+    let page_size = nonnegative(
+        connection
+            .pragma_query_value(None, "page_size", |r| r.get::<_, i64>(0))
+            .map_err(storage_error)?,
+    )?;
+    let free = nonnegative(
+        connection
+            .pragma_query_value(None, "freelist_count", |r| r.get::<_, i64>(0))
+            .map_err(storage_error)?,
+    )?;
     Ok(StorageStats {
         schema_version: SCHEMA_VERSION,
         generations: count("generations")?,
@@ -2366,7 +2376,9 @@ fn storage_stats_connection(connection: &Connection, directory: &Path) -> VrgRes
         database_bytes: size("vrg.sqlite3"),
         wal_bytes: size("vrg.sqlite3-wal"),
         shared_memory_bytes: size("vrg.sqlite3-shm"),
-        freelist_bytes: free * page_size,
+        freelist_bytes: free
+            .checked_mul(page_size)
+            .ok_or_else(|| VrgError::Storage("freelist byte statistic overflow".into()))?,
     })
 }
 
