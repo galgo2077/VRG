@@ -74,6 +74,11 @@ fn ids(event: &StopEvent) -> VrgResult<(&str, &str)> {
 }
 
 fn snapshot(config: &VrgConfig) -> VrgResult<String> {
+    // A revision comparison is meaningful only for the same authorized scope.
+    let scope = serde_json::to_string(&(&config.data_dir, &config.roots)).map_err(storage_error)?;
+    if config.roots.is_empty() {
+        return Ok(json!({"scope":scope,"revisions":[]}).to_string());
+    }
     let root = config
         .roots
         .iter()
@@ -85,8 +90,13 @@ fn snapshot(config: &VrgConfig) -> VrgResult<String> {
             "memory root is not a canonical directory".into(),
         ));
     }
-    let mut values = Vec::with_capacity(NOTE_NAMES.len());
-    for name in NOTE_NAMES {
+    let names: Vec<&str> = root
+        .allowed_files
+        .as_ref()
+        .map(|files| files.iter().map(String::as_str).collect())
+        .unwrap_or_else(|| NOTE_NAMES.to_vec());
+    let mut values = Vec::with_capacity(names.len());
+    for name in names {
         let path = canonical.join(name);
         match fs::symlink_metadata(&path) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => values.push((name, None)),
@@ -102,7 +112,17 @@ fn snapshot(config: &VrgConfig) -> VrgResult<String> {
             }
         }
     }
-    serde_json::to_string(&values).map_err(storage_error)
+    Ok(json!({"scope":scope,"revisions":values}).to_string())
+}
+
+fn same_scope(baseline: &str, observed: &str) -> bool {
+    let scope = |value: &str| {
+        serde_json::from_str::<serde_json::Value>(value)
+            .ok()
+            .and_then(|v| v.get("scope").and_then(|s| s.as_str()).map(str::to_owned))
+    };
+    let baseline = scope(baseline);
+    baseline.is_some() && baseline == scope(observed)
 }
 fn open(path: Option<&Path>) -> VrgResult<(VrgConfig, Connection, PathBuf)> {
     let config_path = chosen_config(path)?.canonicalize()?;
@@ -199,10 +219,30 @@ fn open(path: Option<&Path>) -> VrgResult<(VrgConfig, Connection, PathBuf)> {
             ));
         }
     }
-    let conn = Connection::open(&db).map_err(storage_error)?;
+    let mut conn = Connection::open(&db).map_err(storage_error)?;
     conn.busy_timeout(std::time::Duration::from_secs(5))
         .map_err(storage_error)?;
     conn.execute_batch("PRAGMA journal_mode=DELETE; CREATE TABLE IF NOT EXISTS turn_state (session_key TEXT PRIMARY KEY, turn_key TEXT NOT NULL, baseline TEXT NOT NULL, result TEXT, reason TEXT, proof TEXT, updated_ms INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, event TEXT NOT NULL, session_key TEXT NOT NULL, turn_key TEXT, started_ms INTEGER NOT NULL, finished_ms INTEGER NOT NULL, outcome TEXT NOT NULL, sync_state TEXT NOT NULL);").map_err(storage_error)?;
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(storage_error)?;
+    let has_continued = {
+        let mut columns = tx
+            .prepare("PRAGMA table_info(turn_state)")
+            .map_err(storage_error)?;
+        let names = columns
+            .query_map([], |r| r.get::<_, String>(1))
+            .map_err(storage_error)?;
+        let names = names
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(storage_error)?;
+        names.iter().any(|name| name == "continued")
+    };
+    if !has_continued {
+        tx.execute_batch("ALTER TABLE turn_state ADD COLUMN continued INTEGER NOT NULL DEFAULT 0")
+            .map_err(storage_error)?;
+    }
+    tx.commit().map_err(storage_error)?;
     Ok((config, conn, config_path))
 }
 fn shquote(value: &str) -> String {
@@ -222,21 +262,37 @@ pub fn run_turn_hook(config_override: Option<PathBuf>) -> VrgResult<()> {
     };
     let result = begin_turn(&event, config_override.as_deref());
     let output = match result {
-        Ok((token, config)) => {
+        Ok((token, config, memory_state)) => {
             let executable = env::current_exe()?;
             let command = format!(
-                "{} --config {} codex-close --token {}",
+                "cd {} && {} --config {} codex-close --token {}",
+                shquote(&env::current_dir()?.to_string_lossy()),
                 shquote(&executable.to_string_lossy()),
                 shquote(&config.to_string_lossy()),
                 token
             );
             let instruction = format!(
-                "At the end of this turn, decide whether it produced new durable project knowledge. If yes, update the appropriate authorized memory file and run {command} --result documented. If no, do not edit memory and run {command} --result no-new --reason REASON, replacing REASON with no-change, trivial, already-recorded, or no-durable-result. This records only the declaration, bounded reason and source revisions, not conversation content."
+                "VRG memory state: {memory_state}. At the end of this turn, decide whether it produced new durable project knowledge. If yes, update an authorized memory file and run {command} --result documented. If no, do not edit memory and run {command} --result no-new --reason REASON, replacing REASON with no-change, trivial, already-recorded, or no-durable-result. No configured memory root means no authorized documentation destination; do not create notes there. A scope mismatch requires configuration repair and a fresh turn, never a false declaration. This records only the declaration, bounded reason and source revisions, not conversation content."
             );
             json!({"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":instruction}})
         }
-        Err(_) => {
-            json!({"systemMessage":"VRG documentation check could not initialize for this turn."})
+        Err(error) => {
+            let category = match error {
+                VrgError::Io(ref e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    "configured source or storage path is missing"
+                }
+                VrgError::Io(ref e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                    "source or storage access failed"
+                }
+                VrgError::InvalidConfig(_) => "configuration is invalid",
+                VrgError::AccessDenied(_)
+                | VrgError::PathEscape(_)
+                | VrgError::SymlinkRejected(_) => {
+                    "source authorization or storage safety check failed"
+                }
+                _ => "closure storage is unavailable",
+            };
+            json!({"systemMessage":format!("VRG documentation check could not initialize for this turn: {category}.")})
         }
     };
     let mut bytes = serde_json::to_vec(&output).map_err(storage_error)?;
@@ -253,7 +309,10 @@ pub fn run_turn_hook(config_override: Option<PathBuf>) -> VrgResult<()> {
     }
     logged
 }
-fn begin_turn(event: &StopEvent, path: Option<&Path>) -> VrgResult<(String, PathBuf)> {
+fn begin_turn(
+    event: &StopEvent,
+    path: Option<&Path>,
+) -> VrgResult<(String, PathBuf, &'static str)> {
     let (session, turn) = ids(event)?;
     let (config, mut conn, config_path) = open(path)?;
     let baseline = snapshot(&config)?;
@@ -281,9 +340,14 @@ fn begin_turn(event: &StopEvent, path: Option<&Path>) -> VrgResult<(String, Path
     if !known && count >= MAX_SESSIONS {
         return Err(VrgError::Storage("closure session limit reached".into()));
     }
-    tx.execute("INSERT INTO turn_state(session_key,turn_key,baseline,result,reason,proof,updated_ms) VALUES(?1,?2,?3,NULL,NULL,NULL,?4) ON CONFLICT(session_key) DO UPDATE SET turn_key=excluded.turn_key,baseline=excluded.baseline,result=NULL,reason=NULL,proof=NULL,updated_ms=excluded.updated_ms WHERE turn_state.turn_key != excluded.turn_key", params![key, token, baseline, now_ms()]).map_err(storage_error)?;
+    tx.execute("INSERT INTO turn_state(session_key,turn_key,baseline,result,reason,proof,updated_ms) VALUES(?1,?2,?3,NULL,NULL,NULL,?4) ON CONFLICT(session_key) DO UPDATE SET turn_key=excluded.turn_key,baseline=excluded.baseline,result=NULL,reason=NULL,proof=NULL,continued=0,updated_ms=excluded.updated_ms WHERE turn_state.turn_key != excluded.turn_key", params![key, token, baseline, now_ms()]).map_err(storage_error)?;
     tx.commit().map_err(storage_error)?;
-    Ok((token, config_path))
+    let memory_state = if config.roots.is_empty() {
+        "unconfigured (no authorized documentation destination)"
+    } else {
+        "configured (an empty authorized memory directory is legitimate)"
+    };
+    Ok((token, config_path, memory_state))
 }
 
 pub fn attest_close(
@@ -331,6 +395,11 @@ pub fn attest_close(
     if current != token {
         return Err(VrgError::AccessDenied(
             "closure token is not current for this session".into(),
+        ));
+    }
+    if !same_scope(&baseline, &observed) {
+        return Err(VrgError::Conflict(
+            "closure source scope changed; restore the original scope or begin a fresh turn".into(),
         ));
     }
     if (result == "documented") == (baseline == observed) {
@@ -392,6 +461,16 @@ pub(super) fn check_stop(event: &StopEvent, path: Option<&Path>) -> VrgResult<St
         return Ok(format!("no-new:{}", reason.unwrap_or_default()));
     }
     Ok(result)
+}
+
+pub(super) fn claim_continuation(event: &StopEvent, path: Option<&Path>) -> VrgResult<bool> {
+    let (session, turn) = ids(event)?;
+    let (_, conn, _) = open(path)?;
+    let changed = conn.execute(
+        "UPDATE turn_state SET continued=1 WHERE session_key=?1 AND turn_key=?2 AND continued=0",
+        params![session_key(session), event_key(session, turn)],
+    ).map_err(storage_error)?;
+    Ok(changed == 1)
 }
 
 pub(super) fn audit(

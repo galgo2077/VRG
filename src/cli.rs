@@ -9,10 +9,11 @@ use clap::{Args, Parser, Subcommand};
 use serde::Serialize;
 
 use crate::{
+    VrgEngine,
     config::VrgConfig,
     contracts::{RuntimeIdentity, RuntimeRootIdentity, SearchRequest, SourceRef},
     error::{VrgError, VrgResult},
-    mcp_server, VrgEngine,
+    mcp_server,
 };
 
 const MAX_QUERY_BYTES: usize = 16 * 1024;
@@ -124,6 +125,9 @@ struct SetupArgs {
     /// Explicitly authorize operational memory under this project directory.
     #[arg(long)]
     memory_dir: Option<PathBuf>,
+    /// Explicitly opt this project into Adaptive Memory.
+    #[arg(long)]
+    adaptive_memory: bool,
     /// Print the proposed changes without creating files or downloading.
     #[arg(long)]
     dry_run: bool,
@@ -173,6 +177,12 @@ struct SearchArgs {
     allow_stale: bool,
     #[arg(long, default_value_t = 0)]
     graph_hops: u8,
+    /// Aggregate serialized response byte budget (512..8192).
+    #[arg(long)]
+    max_response_bytes: Option<usize>,
+    /// Context estimate units, explicitly UTF-8 bytes / 4 rather than billed tokens.
+    #[arg(long)]
+    max_context_units: Option<usize>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -197,6 +207,37 @@ enum CloseReason {
 #[derive(Debug, Subcommand)]
 enum MemoryCommand {
     Status,
+    /// Report physical object, generation and storage accounting.
+    Stats,
+    /// Create a separate migrated store; never upgrade the source profile in place.
+    Migrate {
+        /// New dedicated destination, outside source roots; stop legacy writers first.
+        #[arg(long)]
+        offline_copy: PathBuf,
+    },
+    /// Export attributed current sources for a local Codex proposal; does not call a model.
+    Plan,
+    /// Apply a strict local proposal after source and generation revalidation.
+    Apply {
+        #[arg(long)]
+        proposal: PathBuf,
+    },
+    /// Plan safe derived-state retention; apply only when explicitly requested.
+    Maintain {
+        #[arg(long)]
+        apply: bool,
+    },
+    /// Archive an authorized source revision as an exact derived representation.
+    Archive {
+        root_id: String,
+        relative_path: String,
+    },
+    /// Return exact archived bytes as JSON; never overwrite a source note.
+    Restore {
+        root_id: String,
+        relative_path: String,
+        revision: String,
+    },
     Events {
         #[arg(long, default_value_t = 20)]
         limit: usize,
@@ -259,13 +300,83 @@ pub async fn run() -> VrgResult<()> {
             });
             crate::auto_sync::attest_close(cli.config, &token, result, reason)
         }
+        Command::Memory {
+            command: MemoryCommand::Migrate { offline_copy },
+        } => {
+            let path = match cli
+                .config
+                .or_else(|| env::var_os("VRG_CONFIG").map(PathBuf::from))
+            {
+                Some(path) => path,
+                None => default_config_path()?,
+            };
+            let config = VrgConfig::load(path)?;
+            config.validate_layout()?;
+            if !offline_copy.is_absolute() {
+                return Err(VrgError::InvalidConfig(
+                    "migration destination must be absolute".into(),
+                ));
+            }
+            let mut target_config = config.clone();
+            target_config.data_dir = offline_copy;
+            target_config.validate_layout()?;
+            target_config.data_dir = target_config.canonical_data_dir()?;
+            if target_config.data_dir == config.canonical_data_dir()? {
+                return Err(VrgError::InvalidConfig(
+                    "migration must use a separate destination".into(),
+                ));
+            }
+            let migrated = crate::storage::DerivedStore::migrate_schema_copy(
+                &config.data_dir,
+                &target_config.data_dir,
+            )?;
+            print_json(&serde_json::json!({"migrated": migrated,"source_unchanged":true}))
+        }
         Command::Memory { command } => {
             let engine = open_engine(cli.config)?;
             match command {
-                MemoryCommand::Status => print_json(&serde_json::json!({
-                    "capture_enabled": engine.capture_session_events(),
-                    "stored_events": engine.session_event_count()?,
-                })),
+                MemoryCommand::Migrate { .. } => {
+                    unreachable!("migration is handled before opening the engine")
+                }
+                MemoryCommand::Status | MemoryCommand::Stats => {
+                    let mut report = engine.adaptive_status()?;
+                    if let Some(fields) = report.as_object_mut() {
+                        fields.insert(
+                            "capture_enabled".into(),
+                            engine.capture_session_events().into(),
+                        );
+                        fields.insert("stored_events".into(), engine.session_event_count()?.into());
+                    }
+                    print_json(&report)
+                }
+                MemoryCommand::Plan => print_json(&engine.adaptive_plan()?),
+                MemoryCommand::Apply { proposal } => {
+                    let meta = fs::symlink_metadata(&proposal)?;
+                    if !meta.is_file() || meta.file_type().is_symlink() || meta.len() > 256 * 1024 {
+                        return Err(VrgError::InvalidConfig(
+                            "proposal must be a regular non-symlink JSON file no larger than 256 KiB".into(),
+                        ));
+                    }
+                    use std::io::Read;
+                    let mut bytes = Vec::new();
+                    fs::File::open(&proposal)?
+                        .take(256 * 1024 + 1)
+                        .read_to_end(&mut bytes)?;
+                    if bytes.len() > 256 * 1024 {
+                        return Err(VrgError::InvalidConfig("proposal exceeds 256 KiB".into()));
+                    }
+                    print_json(&engine.apply_memory_proposal(&bytes)?)
+                }
+                MemoryCommand::Maintain { apply } => print_json(&engine.adaptive_maintain(apply)?),
+                MemoryCommand::Archive {
+                    root_id,
+                    relative_path,
+                } => print_json(&engine.archive_source(&root_id, &relative_path)?),
+                MemoryCommand::Restore {
+                    root_id,
+                    relative_path,
+                    revision,
+                } => print_json(&engine.restore_archive(&root_id, &relative_path, &revision)?),
                 MemoryCommand::Events { limit } => {
                     let cwd = env::current_dir()?.to_string_lossy().to_string();
                     print_json(&engine.recent_session_events(&cwd, limit)?)
@@ -303,16 +414,32 @@ pub async fn run() -> VrgResult<()> {
             }
             let engine = open_engine(cli.config)?;
             let roots = (!args.roots.is_empty()).then_some(args.roots);
-            print_json(&engine.search_with_policy(
-                SearchRequest {
-                    query: args.query,
-                    limit: args.limit,
-                    root_ids: roots,
-                    use_semantic: !args.text_only,
-                    graph_hops: args.graph_hops,
-                },
-                args.allow_stale,
-            )?)
+            let request = SearchRequest {
+                query: args.query,
+                limit: args.limit,
+                root_ids: roots,
+                use_semantic: !args.text_only,
+                graph_hops: args.graph_hops,
+            };
+            let policy = engine.adaptive_policy();
+            if policy.enabled
+                || args.max_response_bytes.is_some()
+                || args.max_context_units.is_some()
+            {
+                let budget = crate::adaptive::Budget {
+                    max_response_bytes: args
+                        .max_response_bytes
+                        .unwrap_or(policy.max_response_bytes),
+                    max_context_units: args.max_context_units.unwrap_or(policy.max_context_units),
+                };
+                print_json_compact(&engine.search_budgeted_with_policy(
+                    request,
+                    budget,
+                    args.allow_stale,
+                )?)
+            } else {
+                print_json(&engine.search_with_policy(request, args.allow_stale)?)
+            }
         }
         Command::Graph {
             root_id,
@@ -453,6 +580,16 @@ fn print_json(value: &impl Serialize) -> VrgResult<()> {
     let json = serde_json::to_string_pretty(value)
         .map_err(|error| VrgError::InvalidConfig(error.to_string()))?;
     println!("{json}");
+    Ok(())
+}
+
+/// Budgeted responses are measured in their compact wire representation.
+fn print_json_compact(value: &impl Serialize) -> VrgResult<()> {
+    let json =
+        serde_json::to_vec(value).map_err(|error| VrgError::InvalidConfig(error.to_string()))?;
+    let mut stdout = io::stdout().lock();
+    stdout.write_all(&json)?;
+    stdout.flush()?;
     Ok(())
 }
 
@@ -685,7 +822,9 @@ fn run_setup(explicit_config: Option<PathBuf>, mut args: SetupArgs) -> VrgResult
             "--offline prohibits model download".into(),
         ));
         #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-        eprintln!("Offline mode cannot download the model; setup will retain text-only mode if it is unavailable.");
+        eprintln!(
+            "Offline mode cannot download the model; setup will retain text-only mode if it is unavailable."
+        );
     }
     println!(
         "Environment: {} / {}; executable: {}",
@@ -770,6 +909,7 @@ fn run_setup(explicit_config: Option<PathBuf>, mut args: SetupArgs) -> VrgResult
         model_dir,
         memory_dir,
         synthetic_root: args.synthetic,
+        adaptive_memory: args.adaptive_memory,
     };
     let mut plan = crate::setup::plan_setup(&options, extra.clone())?;
     // Capture both plans before a potentially long native build, so a later
@@ -810,7 +950,9 @@ fn run_setup(explicit_config: Option<PathBuf>, mut args: SetupArgs) -> VrgResult
     println!("  Derived data: {}", options.data_dir.display());
     #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
     if options.model_dir.is_some() {
-        println!("  Intel runtime: reuse the packaged or verified profile runtime; if unavailable, building official ONNX Runtime 1.24.1 requires separate consent, network, Git, CMake 3.28+, Python 3.10+ and the Xcode command-line tools.");
+        println!(
+            "  Intel runtime: reuse the packaged or verified profile runtime; if unavailable, building official ONNX Runtime 1.24.1 requires separate consent, network, Git, CMake 3.28+, Python 3.10+ and the Xcode command-line tools."
+        );
         if args.build_onnx_runtime {
             println!(
                 "  Runtime source build is authorized; cache: {}",
@@ -892,7 +1034,9 @@ fn run_setup(explicit_config: Option<PathBuf>, mut args: SetupArgs) -> VrgResult
     })();
     #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
     if let Err(error) = prepare_semantic {
-        eprintln!("Intel semantic search remains pending: {error}. Attempting the preplanned text-only fallback.");
+        eprintln!(
+            "Intel semantic search remains pending: {error}. Attempting the preplanned text-only fallback."
+        );
         options.model_dir = None;
         plan = text_plan.ok_or_else(|| {
             VrgError::InvalidConfig("text-only fallback was not planned".into())

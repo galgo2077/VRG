@@ -31,6 +31,7 @@ fn dry_plan_and_idempotence() {
         model_dir: None,
         memory_dir: None,
         synthetic_root: false,
+        adaptive_memory: false,
     };
     let plan = plan_setup(&options, vec![]).unwrap();
     assert_eq!(plan.changes().len(), 1);
@@ -241,6 +242,7 @@ fn synthetic_profile_is_planned_without_writes_and_admits_only_sample() {
         model_dir: None,
         memory_dir: None,
         synthetic_root: true,
+        adaptive_memory: false,
     };
     let plan = plan_setup(&options, vec![]).unwrap();
     assert!(!source.exists());

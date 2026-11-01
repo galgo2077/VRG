@@ -33,6 +33,10 @@ struct SearchArgs {
     semantic: Option<bool>,
     graph_hops: Option<u8>,
     allow_stale: Option<bool>,
+    /// Hard aggregate serialized response bytes, including provenance and accounting.
+    max_response_bytes: Option<usize>,
+    /// UTF8-bytes/4 estimated units, not provider tokens.
+    max_context_units: Option<usize>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -66,7 +70,12 @@ impl VrgTools {
         description = "Return the local VRG module and index status."
     )]
     fn status(&self) -> Result<String, McpError> {
-        let status = self.engine.status();
+        let mut status =
+            serde_json::to_value(self.engine.status()).map_err(|_| internal_error())?;
+        status["adaptive_memory"] = self
+            .engine
+            .adaptive_status()
+            .map_err(|_| internal_error())?;
         serde_json::to_string(&status).map_err(|_| internal_error())
     }
 
@@ -107,6 +116,21 @@ impl VrgTools {
             use_semantic: args.semantic.unwrap_or(true),
             graph_hops,
         };
+        let policy = self.engine.adaptive_policy();
+        if policy.enabled || args.max_response_bytes.is_some() || args.max_context_units.is_some() {
+            let budget = crate::adaptive::Budget {
+                max_response_bytes: args.max_response_bytes.unwrap_or(policy.max_response_bytes),
+                max_context_units: args.max_context_units.unwrap_or(policy.max_context_units),
+            };
+            let response = self
+                .engine
+                .search_budgeted_with_policy(request, budget, args.allow_stale.unwrap_or(false))
+                .map_err(|error| match error {
+                    VrgError::InvalidConfig(_) => invalid_params(),
+                    _ => internal_error(),
+                })?;
+            return serde_json::to_string(&response).map_err(|_| internal_error());
+        }
         let mut response = self
             .engine
             .search_with_policy(request, args.allow_stale.unwrap_or(false))
@@ -251,51 +275,7 @@ fn validate_relative_path(relative_path: &str) -> Result<(), McpError> {
 }
 
 fn bounded_search_snippet(text: &str, query: &str) -> String {
-    if text.len() <= MAX_SEARCH_SNIPPET_BYTES {
-        return text.to_owned();
-    }
-
-    const MARKER: &str = "…";
-    let content_budget = MAX_SEARCH_SNIPPET_BYTES - 2 * MARKER.len();
-    let lowered = text.to_ascii_lowercase();
-    let mut terms: Vec<_> = query
-        .split_ascii_whitespace()
-        .filter(|term| term.len() >= 3)
-        .take(32)
-        .map(str::to_ascii_lowercase)
-        .collect();
-    terms.sort_unstable();
-    terms.dedup();
-    let match_start = terms
-        .iter()
-        .flat_map(|term| lowered.match_indices(term).map(|(index, _)| index))
-        .max_by_key(|&index| {
-            let mut start = index.saturating_sub(content_budget / 3);
-            while !lowered.is_char_boundary(start) {
-                start += 1;
-            }
-            let mut end = (start + content_budget).min(lowered.len());
-            while !lowered.is_char_boundary(end) {
-                end -= 1;
-            }
-            terms
-                .iter()
-                .filter(|term| lowered[start..end].contains(term.as_str()))
-                .count()
-        })
-        .unwrap_or(0);
-    let mut start = match_start.saturating_sub(content_budget / 3);
-    while !text.is_char_boundary(start) {
-        start += 1;
-    }
-    let mut end = (start + content_budget).min(text.len());
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-
-    let prefix = if start > 0 { MARKER } else { "" };
-    let suffix = if end < text.len() { MARKER } else { "" };
-    format!("{prefix}{}{suffix}", &text[start..end])
+    crate::adaptive::bounded_snippet(text, query)
 }
 
 #[cfg(test)]

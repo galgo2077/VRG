@@ -1,3 +1,5 @@
+pub mod adaptive;
+pub mod adaptive_codec;
 pub mod auto_sync;
 pub mod cli;
 pub mod config;

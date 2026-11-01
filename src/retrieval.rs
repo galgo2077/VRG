@@ -34,7 +34,8 @@ pub fn retrieve(
         return Err(VrgError::Search("query must not be empty".into()));
     }
 
-    let snapshot = store.load_current_snapshot()?;
+    let _reader = store.acquire_reader_lease()?;
+    let snapshot = store.load_current_catalog()?;
     let Some(snapshot) = snapshot else {
         let (mode, reason) = if request.use_semantic {
             (
@@ -105,12 +106,13 @@ pub fn retrieve(
 
     if request.graph_hops > 0 {
         add_graph_expansion(
+            store,
             &snapshot,
             &mut ordered,
             request.graph_hops.min(2),
             limit,
             roots,
-        );
+        )?;
         ordered.sort_by(rank_order);
     }
 
@@ -158,7 +160,7 @@ pub fn retrieve(
 
 fn semantic_candidates(
     store: &DerivedStore,
-    snapshot: &IndexSnapshot,
+    _snapshot: &IndexSnapshot,
     embedder: Option<&LocalEmbedder>,
     query: &str,
     roots: Option<&[String]>,
@@ -168,25 +170,15 @@ fn semantic_candidates(
         VrgError::SemanticUnavailable("no local embedding model is configured".into())
     })?;
     let root_ids = roots.unwrap_or_default();
-    let stored_vectors = store.vectors_for_model(embedder.model_id(), root_ids)?;
-    let expected_chunk_ids = snapshot
-        .chunks
-        .iter()
-        .filter(|chunk| {
-            root_ids.is_empty()
-                || root_ids
-                    .iter()
-                    .any(|root_id| root_id == &chunk.source.root_id)
-        })
-        .map(|chunk| chunk.id.as_str())
-        .collect::<BTreeSet<_>>();
+    let stored_vectors = store.vector_catalog_for_model(embedder.model_id(), root_ids)?;
+    let expected_chunk_ids = store.current_chunk_ids(root_ids)?;
     let vector_chunk_ids = stored_vectors
         .iter()
         .map(|stored| stored.chunk.id.as_str())
         .collect::<BTreeSet<_>>();
     if expected_chunk_ids
         .iter()
-        .any(|chunk_id| !vector_chunk_ids.contains(chunk_id))
+        .any(|chunk_id| !vector_chunk_ids.contains(chunk_id.as_str()))
     {
         return Err(VrgError::SemanticUnavailable(
             "active generation has incomplete vectors for the configured local model".into(),
@@ -216,8 +208,13 @@ fn semantic_candidates(
         let Some(stored) = stored_by_chunk.get(candidate.chunk_id.as_str()) else {
             continue;
         };
+        let Some(chunk) = store.chunk_by_id(&stored.chunk.id)? else {
+            return Err(VrgError::Storage(
+                "vector references a missing active chunk".into(),
+            ));
+        };
         result.push(SearchCandidate {
-            chunk: stored.chunk.clone(),
+            chunk,
             title: stored.title.clone(),
             score: candidate.score,
             kinds: vec![MatchKind::Semantic],
@@ -277,26 +274,15 @@ fn insert_ranked(
 }
 
 fn add_graph_expansion(
+    store: &DerivedStore,
     snapshot: &IndexSnapshot,
     ranked: &mut Vec<RankedHit>,
     max_hops: u8,
     limit: usize,
     roots: Option<&[String]>,
-) {
+) -> VrgResult<()> {
     if max_hops == 0 || limit == 0 {
-        return;
-    }
-    let mut chunks_by_source = HashMap::<SourceRef, Vec<_>>::new();
-    for chunk in &snapshot.chunks {
-        if root_allowed(&chunk.source, roots) {
-            chunks_by_source
-                .entry(chunk.source.clone())
-                .or_default()
-                .push(chunk);
-        }
-    }
-    for chunks in chunks_by_source.values_mut() {
-        chunks.sort_by_key(|chunk| chunk.ordinal);
+        return Ok(());
     }
     let titles = snapshot
         .documents
@@ -354,7 +340,8 @@ fn add_graph_expansion(
             {
                 continue;
             }
-            let Some(chunk) = chunks_by_source.get(&next).and_then(|items| items.first()) else {
+            let chunks = store.chunks_for_source(&next)?;
+            let Some(chunk) = chunks.first() else {
                 continue;
             };
             if !known_chunks.insert(chunk.id.clone()) {
@@ -367,7 +354,7 @@ fn add_graph_expansion(
                 .to_owned();
             ranked.push(RankedHit {
                 candidate: SearchCandidate {
-                    chunk: (*chunk).clone(),
+                    chunk: chunk.clone(),
                     title,
                     score: 0.0,
                     kinds: vec![MatchKind::GraphExpansion],
@@ -383,6 +370,7 @@ fn add_graph_expansion(
             }
         }
     }
+    Ok(())
 }
 
 fn group_edges(edges: &[GraphEdge]) -> HashMap<SourceRef, Vec<GraphEdge>> {

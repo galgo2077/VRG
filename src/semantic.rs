@@ -172,6 +172,8 @@ impl LocalEmbedder {
         fingerprint.update(&tokenizer.config_file);
         fingerprint.update(&tokenizer.special_tokens_map_file);
         fingerprint.update(&tokenizer.tokenizer_config_file);
+        fingerprint.update(b"vrg-e5-pipeline-v1:mean:passage-prefix:query-prefix");
+        fingerprint.update(config.max_length.to_le_bytes());
         let model_id = format!(
             "{}#{}",
             config.model_id,

@@ -77,27 +77,32 @@ pub fn run_stop_hook(config_override: Option<PathBuf>) -> crate::VrgResult<()> {
             .filter(|event| event.hook_event_name == "Stop")
         {
             let outcome = closure::check_stop(event, config_override.as_deref());
+            let continuation_requested = outcome.is_err()
+                && !event.stop_hook_active
+                && closure::claim_continuation(event, config_override.as_deref()).unwrap_or(false);
             match outcome.as_deref() {
                 Ok("documented") => {}
                 Ok(value) if value.starts_with("no-new:") => {}
-                _ if !event.stop_hook_active => {
+                _ if continuation_requested => {
                     response.decision = Some("block");
                     response.reason = Some(
                         "Complete the VRG documentation check for this turn using its per-turn token. Record a new durable result in the authorized memory if appropriate, or explicitly declare no new durable knowledge; do not save conversation text.",
                     );
                 }
-                _ => response.system_message = Some(
-                    "VRG documentation closure was not verified after the automatic continuation."
-                        .into(),
-                ),
+                Err(error) => {
+                    response.system_message = Some(format!(
+                        "VRG documentation closure was not verified; continuation is bounded to one per turn: {error}"
+                    ))
+                }
+                _ => {}
             }
             let audit_outcome = match outcome.as_deref() {
                 Ok("documented") => "declared_documented_hash_changed".to_string(),
                 Ok(value) if value.starts_with("no-new:") => {
                     format!("declared_no_new_hash_unchanged:{value}")
                 }
-                _ if event.stop_hook_active => "closure_unverified_after_continuation".to_string(),
-                _ => "closure_continuation_requested".to_string(),
+                _ if continuation_requested => "closure_continuation_requested".to_string(),
+                _ => "closure_unverified_after_continuation".to_string(),
             };
             if closure::audit(event, config_override.as_deref(), started, &audit_outcome).is_err() {
                 response.system_message =
@@ -193,10 +198,8 @@ fn run_event(event: StopEvent, config_override: Option<PathBuf>) -> HookResponse
             );
         }
     };
-    if config.roots.is_empty() && !config.capture_session_events {
-        return HookResponse::message(
-            "VRG synchronization skipped: no authorized source roots are configured.",
-        );
+    if config.roots.is_empty() && !config.capture_session_events && !closure::enabled() {
+        return HookResponse::quiet();
     }
     let engine = match VrgEngine::open(config.clone()) {
         Ok(engine) => engine,
@@ -222,9 +225,7 @@ fn run_event(event: StopEvent, config_override: Option<PathBuf>) -> HookResponse
         }
     }
     if config.roots.is_empty() {
-        return HookResponse::message(
-            "VRG synchronization skipped: no authorized source roots are configured.",
-        );
+        return HookResponse::quiet();
     }
     let event_key = if event.stop_hook_active {
         event_key(session_id, &format!("{turn_id}:continuation"))
@@ -232,9 +233,7 @@ fn run_event(event: StopEvent, config_override: Option<PathBuf>) -> HookResponse
         event_key(session_id, turn_id)
     };
     match engine.sync_on_stop(&event_key) {
-        Ok(StopSyncOutcome::Disabled) => HookResponse::message(
-            "VRG synchronization skipped: no authorized source roots are configured.",
-        ),
+        Ok(StopSyncOutcome::Disabled) => HookResponse::quiet(),
         Ok(StopSyncOutcome::InProgress) => HookResponse::quiet(),
         Ok(StopSyncOutcome::SkippedCurrent(_)) => HookResponse::quiet(),
         Ok(StopSyncOutcome::Duplicate(IndexSyncStatus::Failed { .. }))
@@ -287,10 +286,8 @@ fn run_start_event(event: StopEvent, config_override: Option<PathBuf>) -> HookRe
     };
     let source = event.source.as_deref().unwrap_or("startup");
     let turn_id = event.turn_id.as_deref().unwrap_or(source);
-    if config.roots.is_empty() && !config.capture_session_events {
-        return HookResponse::message(
-            "VRG startup reconciliation skipped: no authorized source roots are configured.",
-        );
+    if config.roots.is_empty() && !config.capture_session_events && !closure::enabled() {
+        return HookResponse::quiet();
     }
     let engine = match VrgEngine::open(config.clone()) {
         Ok(engine) => engine,
@@ -313,9 +310,7 @@ fn run_start_event(event: StopEvent, config_override: Option<PathBuf>) -> HookRe
         return HookResponse::message("VRG SessionStart event could not be persisted.");
     }
     if config.roots.is_empty() {
-        return HookResponse::message(
-            "VRG startup reconciliation skipped: no authorized source roots are configured.",
-        );
+        return HookResponse::quiet();
     }
     let key = event_key(session_id, &format!("start:{source}:{turn_id}"));
     match engine.sync_on_stop(&key) {

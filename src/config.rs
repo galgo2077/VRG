@@ -11,6 +11,12 @@ use crate::error::{VrgError, VrgResult};
 pub struct VrgConfig {
     #[serde(default)]
     pub roots: Vec<RootConfig>,
+    /// Explicit source authorization scoped to one canonical repository.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub project_memory: Vec<ProjectMemoryConfig>,
+    /// Explicit opt-in; existing profiles retain classic retrieval by default.
+    #[serde(default)]
+    pub adaptive_memory: AdaptiveMemoryConfig,
     pub data_dir: PathBuf,
     #[serde(default)]
     pub semantic_model: Option<SemanticModelConfig>,
@@ -22,6 +28,36 @@ pub struct VrgConfig {
     pub chunk_bytes: usize,
     #[serde(default = "default_chunk_overlap")]
     pub chunk_overlap_bytes: usize,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AdaptiveMemoryConfig {
+    pub enabled: bool,
+    pub max_response_bytes: usize,
+    pub max_context_units: usize,
+    pub retain_generations: usize,
+    pub soft_store_budget_mib: u64,
+}
+
+impl Default for AdaptiveMemoryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_response_bytes: 8192,
+            max_context_units: 1536,
+            retain_generations: 5,
+            soft_store_budget_mib: 512,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectMemoryConfig {
+    pub project: PathBuf,
+    pub path: PathBuf,
+    pub allowed_files: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -51,6 +87,8 @@ impl Default for VrgConfig {
     fn default() -> Self {
         Self {
             roots: Vec::new(),
+            project_memory: Vec::new(),
+            adaptive_memory: AdaptiveMemoryConfig::default(),
             data_dir: default_data_dir(),
             semantic_model: None,
             capture_session_events: false,
@@ -76,8 +114,36 @@ impl VrgConfig {
         let text = fs::read_to_string(&canonical_path).map_err(|error| {
             VrgError::InvalidConfig(format!("cannot read {}: {error}", canonical_path.display()))
         })?;
-        let config: Self =
+        let mut config: Self =
             toml::from_str(&text).map_err(|error| VrgError::InvalidConfig(error.to_string()))?;
+        let project = canonical_project(&env::current_dir()?)?;
+        let mut projects = BTreeSet::new();
+        for memory in &config.project_memory {
+            if !memory.project.is_absolute()
+                || memory.project.canonicalize()? != memory.project
+                || !memory.project.is_dir()
+                || !projects.insert(&memory.project)
+            {
+                return Err(VrgError::InvalidConfig(
+                    "project memory requires unique canonical project directories".into(),
+                ));
+            }
+            if project == memory.project {
+                config.roots.push(RootConfig {
+                    id: "vrg-memory".into(),
+                    path: memory.path.clone(),
+                    exclusions: Vec::new(),
+                    allowed_files: Some(memory.allowed_files.clone()),
+                });
+            }
+        }
+        if config
+            .data_dir
+            .components()
+            .any(|part| part.as_os_str() == "{project}")
+        {
+            config.data_dir = project_data_dir(&config.data_dir, &env::current_dir()?)?;
+        }
         config.validate()?;
         let digest = Sha256::digest(text.as_bytes())
             .iter()
@@ -100,6 +166,16 @@ impl VrgConfig {
         if self.session_event_retention_days == 0 || self.session_event_retention_days > 3650 {
             return Err(VrgError::InvalidConfig(
                 "session event retention must be between 1 and 3650 days".into(),
+            ));
+        }
+        let policy = &self.adaptive_memory;
+        if !(512..=8192).contains(&policy.max_response_bytes)
+            || !(128..=262_144).contains(&policy.max_context_units)
+            || !(2..=10_000).contains(&policy.retain_generations)
+            || !(1..=1_048_576).contains(&policy.soft_store_budget_mib)
+        {
+            return Err(VrgError::InvalidConfig(
+                "adaptive memory budgets require 512..8192 response bytes, 128..262144 context estimate units, 2..10000 retained generations and 1..1048576 MiB soft store budget".into(),
             ));
         }
         let mut ids = BTreeSet::new();
@@ -189,6 +265,33 @@ impl VrgConfig {
     }
 }
 
+/// Resolve an optional project directory component using the enclosing repository.
+/// Configurations with a literal data_dir retain their existing behavior.
+fn project_data_dir(template: &std::path::Path, cwd: &std::path::Path) -> VrgResult<PathBuf> {
+    let project = canonical_project(cwd)?;
+    let name = project.file_name().ok_or_else(|| {
+        VrgError::InvalidConfig("project database requires a named working directory".into())
+    })?;
+    let mut result = PathBuf::new();
+    for component in template.components() {
+        if component.as_os_str() == "{project}" {
+            result.push(name);
+        } else {
+            result.push(component.as_os_str());
+        }
+    }
+    Ok(result)
+}
+
+fn canonical_project(cwd: &std::path::Path) -> VrgResult<PathBuf> {
+    let cwd = cwd.canonicalize()?;
+    Ok(cwd
+        .ancestors()
+        .find(|path| path.join(".git").exists())
+        .unwrap_or(&cwd)
+        .to_path_buf())
+}
+
 fn comparable_path(path: &std::path::Path) -> VrgResult<PathBuf> {
     if path.exists() {
         return path
@@ -252,4 +355,36 @@ fn default_model_max_length() -> usize {
 
 fn default_session_event_retention_days() -> u16 {
     90
+}
+
+#[cfg(test)]
+mod project_storage_tests {
+    use super::*;
+
+    #[test]
+    fn project_storage_uses_repository_name_from_nested_directory() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp = env::temp_dir().join(format!(
+            "vrg-project-storage-{}-{nonce}",
+            std::process::id()
+        ));
+        let project = temp.join("Example Project");
+        fs::create_dir_all(project.join(".git")).unwrap();
+        fs::create_dir_all(project.join("src/nested")).unwrap();
+        let template = std::path::Path::new("/tmp/VRG database/{project}");
+        assert_eq!(
+            project_data_dir(template, &project.join("src/nested")).unwrap(),
+            PathBuf::from("/tmp/VRG database/Example Project")
+        );
+        let other = temp.join("Another Project");
+        fs::create_dir(&other).unwrap();
+        assert_eq!(
+            project_data_dir(template, &other).unwrap(),
+            PathBuf::from("/tmp/VRG database/Another Project")
+        );
+        fs::remove_dir_all(temp).unwrap();
+    }
 }

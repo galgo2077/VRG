@@ -4,7 +4,7 @@ members = ["."]
 
 [package]
 name = "vrg"
-version = "0.2.0"
+version = "0.5.0"
 edition = "2024"
 rust-version = "1.92"
 description = "Local-first Vault RAG Graph backend"
@@ -28,6 +28,7 @@ f4-instrumentation = []
 cap-std = "=4.0.3"
 clap = { version = "=4.6.7", features = ["derive"] }
 hex = "=0.4.3"
+flate2 = "=1.1.10"
 pulldown-cmark = "=0.13.5"
 rmcp = { version = "=1.8.0", features = ["server", "macros", "transport-io", "schemars"] }
 notify = "=8.2.1"

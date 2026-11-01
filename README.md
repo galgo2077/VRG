@@ -55,3 +55,7 @@ The next release is being developed with `vrg setup` and `vrg doctor`; these com
 - The portable Unix observer requires explicit local paths and separate review before use. It is a distribution adaptation, not the exact observer used in the recorded G04 validation. Do not publish local Codex configuration or trust records.
 
 The distributed source does not include a user’s vaults, local databases, embeddings, or credentials.
+
+## Adaptive Memory (Linux x86_64 / Codex)
+
+The opt-in Adaptive Memory interface, exact archival, budgets and offline-copy migration are described in [English](docs/public/ADAPTIVE_MEMORY.md) and [Español](docs/public/ADAPTIVE_MEMORY.es.md). Summaries remain attributed derived previews; original source notes are preserved. Release validation results and measured limits are published separately.

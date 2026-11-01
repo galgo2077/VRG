@@ -8,6 +8,9 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 
 use crate::{
@@ -18,7 +21,7 @@ use crate::{
     error::{VrgError, VrgResult},
 };
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 const MAX_QUERY_RESULTS: usize = 1000;
 const SYNC_LOCK_FILE: &str = "vrg-sync.lock";
 
@@ -26,6 +29,7 @@ const SYNC_LOCK_FILE: &str = "vrg-sync.lock";
 pub struct DerivedStore {
     connection: std::sync::Arc<Mutex<Connection>>,
     data_dir: PathBuf,
+    _schema_lease: std::sync::Arc<File>,
 }
 
 #[derive(Clone, Debug)]
@@ -40,6 +44,40 @@ pub struct StoredVector {
 pub struct RecoveryReport {
     pub committed: usize,
     pub aborted: usize,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct MaintenancePlan {
+    pub expected_generation: Option<String>,
+    pub retain: usize,
+    pub remove_generations: Vec<String>,
+    pub protection_fingerprint: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct StorageStats {
+    pub schema_version: i64,
+    pub generations: u64,
+    pub documents: u64,
+    pub chunks: u64,
+    pub text_objects: u64,
+    pub vector_objects: u64,
+    pub logical_text_bytes: u64,
+    pub payload_bytes: u64,
+    pub database_bytes: u64,
+    pub wal_bytes: u64,
+    pub shared_memory_bytes: u64,
+    pub freelist_bytes: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MaintenanceReport {
+    pub removed_generations: usize,
+    pub removed_text_objects: usize,
+    pub removed_vector_objects: usize,
+    pub filesystem_bytes_released: u64,
+    pub stats: StorageStats,
 }
 
 impl DerivedStore {
@@ -78,7 +116,18 @@ impl DerivedStore {
                 Err(error) => return Err(storage_io(error)),
             }
         }
+        let schema_lease = schema_lock(&canonical, false)?;
         let connection = Connection::open(database).map_err(storage_error)?;
+        let existing: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='schema_info')",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(storage_error)?;
+        if existing {
+            check_schema_connection(&connection)?;
+        }
         connection
             .pragma_update(None, "foreign_keys", "ON")
             .map_err(storage_error)?;
@@ -100,7 +149,348 @@ impl DerivedStore {
         Ok(Self {
             connection: std::sync::Arc::new(Mutex::new(connection)),
             data_dir: canonical,
+            _schema_lease: std::sync::Arc::new(schema_lease),
         })
+    }
+
+    fn check_schema(&self) -> VrgResult<()> {
+        let connection = self.lock()?;
+        check_schema_connection(&connection)
+    }
+
+    /// Metadata-only snapshot: retrieval must not eagerly decode every object.
+    pub fn load_current_catalog(&self) -> VrgResult<Option<IndexSnapshot>> {
+        let _reader = self.acquire_reader_lease()?;
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction().map_err(storage_error)?;
+        let Some(generation) = active_generation(&transaction)? else {
+            return Ok(None);
+        };
+        let mut statement = transaction.prepare("SELECT root_id,relative_path,revision,title,frontmatter_json,modified_unix_ms FROM documents WHERE generation_id=?1 ORDER BY root_id,relative_path").map_err(storage_error)?;
+        let documents = statement
+            .query_map([&generation], document_from_row)
+            .map_err(storage_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(storage_error)?;
+        drop(statement);
+        let mut statement = transaction.prepare("SELECT from_root,from_path,to_root,to_path,unresolved_target,kind,start_byte,end_byte FROM edges WHERE generation_id=?1 ORDER BY from_root,from_path,start_byte").map_err(storage_error)?;
+        let edges = statement
+            .query_map([&generation], edge_from_row)
+            .map_err(storage_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(storage_error)?;
+        drop(statement);
+        transaction.commit().map_err(storage_error)?;
+        Ok(Some(IndexSnapshot {
+            generation_id: generation,
+            documents,
+            chunks: Vec::new(),
+            edges,
+            vectors: Vec::new(),
+        }))
+    }
+
+    /// Hold across a multi-call read to keep GC from retiring its generation.
+    /// Locks are released by the OS after a crash; there is no clock-based TTL.
+    pub fn acquire_reader_lease(&self) -> VrgResult<File> {
+        named_lock(&self.data_dir, "vrg-gc.lock", false)
+    }
+
+    pub fn chunks_for_source(&self, source: &SourceRef) -> VrgResult<Vec<TextChunk>> {
+        let _reader = self.acquire_reader_lease()?;
+        let connection = self.lock()?;
+        let Some(generation) = active_generation(&connection)? else {
+            return Ok(Vec::new());
+        };
+        let mut statement=connection.prepare("SELECT chunk_id,root_id,relative_path,revision,ordinal,start_byte,end_byte,body FROM chunks WHERE generation_id=?1 AND root_id=?2 AND relative_path=?3 ORDER BY ordinal").map_err(storage_error)?;
+        statement
+            .query_map(
+                params![generation, source.root_id, source.relative_path],
+                chunk_from_row,
+            )
+            .map_err(storage_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(storage_error)
+    }
+
+    pub fn chunk_by_id(&self, id: &str) -> VrgResult<Option<TextChunk>> {
+        let _reader = self.acquire_reader_lease()?;
+        let connection = self.lock()?;
+        let Some(generation) = active_generation(&connection)? else {
+            return Ok(None);
+        };
+        connection.query_row("SELECT chunk_id,root_id,relative_path,revision,ordinal,start_byte,end_byte,body FROM chunks WHERE generation_id=?1 AND chunk_id=?2",params![generation,id],chunk_from_row).optional().map_err(storage_error)
+    }
+
+    pub fn current_chunk_ids(&self, root_ids: &[String]) -> VrgResult<BTreeSet<String>> {
+        let _reader = self.acquire_reader_lease()?;
+        let connection = self.lock()?;
+        let Some(generation) = active_generation(&connection)? else {
+            return Ok(BTreeSet::new());
+        };
+        let mut statement = connection
+            .prepare("SELECT chunk_id,root_id FROM chunk_manifests WHERE generation_id=?1")
+            .map_err(storage_error)?;
+        let rows = statement
+            .query_map([generation], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })
+            .map_err(storage_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(storage_error)?;
+        Ok(rows
+            .into_iter()
+            .filter(|(_, root)| root_ids.is_empty() || root_ids.contains(root))
+            .map(|(id, _)| id)
+            .collect())
+    }
+
+    pub fn load_adaptive_state(&self) -> VrgResult<Option<String>> {
+        let connection = self.lock()?;
+        connection
+            .query_row(
+                "SELECT state_json FROM adaptive_state WHERE singleton=1",
+                [],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(storage_error)
+    }
+
+    /// Optimistic generation + replay guard are checked in the same transaction.
+    pub fn apply_adaptive_state(
+        &self,
+        expected_generation: &str,
+        proposal_id: &str,
+        fingerprint: &str,
+        state_json: &str,
+    ) -> VrgResult<bool> {
+        let _references = self.acquire_reader_lease()?;
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(storage_error)?;
+        check_schema_connection(&transaction)?;
+        let receipt: Option<String> = transaction
+            .query_row(
+                "SELECT fingerprint FROM adaptive_receipts WHERE proposal_id=?1",
+                [proposal_id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(storage_error)?;
+        if let Some(prior) = receipt {
+            if prior == fingerprint {
+                return Ok(false);
+            }
+            return Err(VrgError::Conflict(
+                "proposal ID was already used with different content".into(),
+            ));
+        }
+        if active_generation(&transaction)?.as_deref() != Some(expected_generation) {
+            return Err(VrgError::Conflict(
+                "adaptive proposal generation is stale".into(),
+            ));
+        }
+        serde_json::from_str::<serde_json::Value>(state_json)
+            .map_err(|e| VrgError::InvalidConfig(e.to_string()))?;
+        transaction.execute("INSERT INTO adaptive_state(singleton,generation_id,proposal_id,fingerprint,state_json) VALUES(1,?1,?2,?3,?4) ON CONFLICT(singleton) DO UPDATE SET generation_id=excluded.generation_id,proposal_id=excluded.proposal_id,fingerprint=excluded.fingerprint,state_json=excluded.state_json",params![expected_generation,proposal_id,fingerprint,state_json]).map_err(storage_error)?;
+        transaction
+            .execute(
+                "INSERT INTO adaptive_receipts(proposal_id,fingerprint) VALUES(?1,?2)",
+                params![proposal_id, fingerprint],
+            )
+            .map_err(storage_error)?;
+        transaction.commit().map_err(storage_error)?;
+        Ok(true)
+    }
+
+    /// Every exact source revision still reachable through retained manifests or
+    /// adaptive references. Archive GC must union this with currently authorized sources.
+    pub fn retained_source_revisions(&self) -> VrgResult<Vec<(SourceRef, String)>> {
+        let _reader = self.acquire_reader_lease()?;
+        let connection = self.lock()?;
+        retained_source_revisions_connection(&connection, &[])
+    }
+
+    /// Run archive reachability/deletion while cooperative publishers, pins and
+    /// adaptive reference writers are excluded. Caller already owns sync lock;
+    /// the callback must not re-enter this store or acquire a nested reader lease.
+    pub fn with_retained_source_revisions<R>(
+        &self,
+        action: impl FnOnce(Vec<(SourceRef, String)>) -> VrgResult<R>,
+    ) -> VrgResult<R> {
+        let _exclusive = named_lock(&self.data_dir, "vrg-gc.lock", true)?;
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(storage_error)?;
+        check_schema_connection(&transaction)?;
+        let references = retained_source_revisions_connection(&transaction, &[])?;
+        let result = action(references)?;
+        transaction.commit().map_err(storage_error)?;
+        Ok(result)
+    }
+
+    pub fn projected_source_revisions(
+        &self,
+        plan: &MaintenancePlan,
+    ) -> VrgResult<Vec<(SourceRef, String)>> {
+        let _reader = self.acquire_reader_lease()?;
+        let connection = self.lock()?;
+        if maintenance_plan_connection(&connection, plan.retain)? != *plan {
+            return Err(VrgError::Conflict(
+                "maintenance reference plan is stale".into(),
+            ));
+        }
+        retained_source_revisions_connection(&connection, &plan.remove_generations)
+    }
+
+    pub fn storage_stats(&self) -> VrgResult<StorageStats> {
+        let connection = self.lock()?;
+        storage_stats_connection(&connection, &self.data_dir)
+    }
+
+    pub fn pin_generation(&self, generation: &str, pin_id: &str) -> VrgResult<()> {
+        let _references = self.acquire_reader_lease()?;
+        if pin_id.is_empty() || pin_id.len() > 256 {
+            return Err(VrgError::InvalidConfig("invalid pin ID".into()));
+        }
+        let connection = self.lock()?;
+        check_schema_connection(&connection)?;
+        connection
+            .execute(
+                "INSERT OR IGNORE INTO generation_pins(generation_id,pin_id) VALUES(?1,?2)",
+                params![generation, pin_id],
+            )
+            .map_err(storage_error)?;
+        Ok(())
+    }
+
+    pub fn unpin_generation(&self, generation: &str, pin_id: &str) -> VrgResult<()> {
+        let _references = self.acquire_reader_lease()?;
+        let connection = self.lock()?;
+        check_schema_connection(&connection)?;
+        connection
+            .execute(
+                "DELETE FROM generation_pins WHERE generation_id=?1 AND pin_id=?2",
+                params![generation, pin_id],
+            )
+            .map_err(storage_error)?;
+        Ok(())
+    }
+
+    pub fn maintenance_plan(&self, retain: usize) -> VrgResult<MaintenancePlan> {
+        let connection = self.lock()?;
+        maintenance_plan_connection(&connection, retain)
+    }
+
+    pub fn apply_maintenance(&self, plan: &MaintenancePlan) -> VrgResult<MaintenanceReport> {
+        let _gc = named_lock(&self.data_dir, "vrg-gc.lock", true)?;
+        let _sync = named_lock(&self.data_dir, SYNC_LOCK_FILE, true)?;
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(storage_error)?;
+        check_schema_connection(&transaction)?;
+        if maintenance_plan_connection(&transaction, plan.retain)? != *plan {
+            return Err(VrgError::Conflict(
+                "maintenance plan is stale; protected references changed".into(),
+            ));
+        }
+        for generation in &plan.remove_generations {
+            for table in ["vector_manifests", "chunk_manifests", "edges", "documents"] {
+                transaction
+                    .execute(
+                        &format!("DELETE FROM {table} WHERE generation_id=?1"),
+                        [generation],
+                    )
+                    .map_err(storage_error)?;
+            }
+            transaction
+                .execute(
+                    "DELETE FROM generations WHERE generation_id=?1",
+                    [generation],
+                )
+                .map_err(storage_error)?;
+        }
+        let removed_vectors=transaction.execute("DELETE FROM vector_objects WHERE NOT EXISTS(SELECT 1 FROM vector_manifests m WHERE m.object_id=vector_objects.object_id)",[]).map_err(storage_error)?;
+        transaction.execute("DELETE FROM chunk_fts WHERE rowid IN (SELECT o.rowid FROM text_objects o WHERE NOT EXISTS(SELECT 1 FROM chunk_manifests m WHERE m.object_id=o.object_id) AND NOT EXISTS(SELECT 1 FROM vector_objects v WHERE v.input_object_id=o.object_id))",[]).map_err(storage_error)?;
+        let removed_text=transaction.execute("DELETE FROM text_objects WHERE NOT EXISTS(SELECT 1 FROM chunk_manifests m WHERE m.object_id=text_objects.object_id) AND NOT EXISTS(SELECT 1 FROM vector_objects v WHERE v.input_object_id=text_objects.object_id)",[]).map_err(storage_error)?;
+        transaction.commit().map_err(storage_error)?;
+        let stats = storage_stats_connection(&connection, &self.data_dir)?;
+        Ok(MaintenanceReport {
+            removed_generations: plan.remove_generations.len(),
+            removed_text_objects: removed_text,
+            removed_vector_objects: removed_vectors,
+            filesystem_bytes_released: 0,
+            stats,
+        })
+    }
+
+    /// Explicit offline migration. The original is backed up consistently and
+    /// remains untouched until the validated staging database is atomically published.
+    /// v1 processes do not understand the cooperative schema lock: stop them first.
+    /// Snapshot an authorized store into a NEW directory and migrate only that
+    /// copy. The source can remain online: SQLite supplies a consistent snapshot.
+    /// Activation is a separate explicit profile change after validation.
+    pub fn migrate_schema_copy(
+        source: impl AsRef<Path>,
+        destination: impl AsRef<Path>,
+    ) -> VrgResult<bool> {
+        let source = source.as_ref();
+        let destination = destination.as_ref();
+        if !source.is_absolute()
+            || fs::canonicalize(source).map_err(storage_io)? != source
+            || !destination.is_absolute()
+            || source == destination
+        {
+            return Err(VrgError::InvalidConfig(
+                "migration copy requires distinct canonical absolute directories".into(),
+            ));
+        }
+        let parent = destination
+            .parent()
+            .ok_or_else(|| VrgError::InvalidConfig("migration destination has no parent".into()))?;
+        if fs::canonicalize(parent).map_err(storage_io)? != parent
+            || destination
+                .components()
+                .any(|c| !matches!(c, Component::RootDir | Component::Normal(_)))
+        {
+            return Err(VrgError::InvalidConfig(
+                "migration destination parent must be canonical".into(),
+            ));
+        }
+        let source_database = source.join("vrg.sqlite3");
+        if fs::symlink_metadata(&source_database)
+            .map_err(storage_io)?
+            .file_type()
+            .is_symlink()
+        {
+            return Err(VrgError::SymlinkRejected(
+                "source database is a symlink".into(),
+            ));
+        }
+        fs::create_dir(destination).map_err(storage_io)?;
+        restrict_permissions(destination, 0o700)?;
+        let connection = Connection::open_with_flags(
+            &source_database,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .map_err(storage_error)?;
+        connection
+            .execute(
+                "VACUUM INTO ?1",
+                [destination.join("vrg.sqlite3").to_string_lossy().as_ref()],
+            )
+            .map_err(storage_error)?;
+        drop(connection);
+        restrict_permissions(&destination.join("vrg.sqlite3"), 0o600)?;
+        migrate_schema(destination)
+    }
+
+    pub fn migrate_schema(data_dir: impl AsRef<Path>) -> VrgResult<bool> {
+        migrate_schema(data_dir.as_ref())
     }
 
     pub fn current_generation_id(&self) -> VrgResult<Option<String>> {
@@ -389,11 +779,15 @@ impl DerivedStore {
     }
 
     pub fn load_current_snapshot(&self) -> VrgResult<Option<IndexSnapshot>> {
-        let connection = self.lock()?;
-        let Some(generation_id) = active_generation(&connection)? else {
+        let _reader = self.acquire_reader_lease()?;
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction().map_err(storage_error)?;
+        let Some(generation_id) = active_generation(&transaction)? else {
             return Ok(None);
         };
-        load_snapshot(&connection, &generation_id).map(Some)
+        let snapshot = load_snapshot(&transaction, &generation_id)?;
+        transaction.commit().map_err(storage_error)?;
+        Ok(Some(snapshot))
     }
 
     /// Publishes a complete immutable generation in one SQLite transaction.
@@ -403,7 +797,9 @@ impl DerivedStore {
         snapshot: IndexSnapshot,
         expected_parent: Option<&str>,
     ) -> VrgResult<()> {
-        self.recover_journal()?;
+        let _publication = named_lock(&self.data_dir, "vrg-gc.lock", true)?;
+        self.check_schema()?;
+        self.recover_journal_locked()?;
         validate_snapshot(&snapshot)?;
         let mut connection = self.lock()?;
         let before = active_generation(&connection)?;
@@ -439,6 +835,7 @@ impl DerivedStore {
         )?;
 
         f4_crash_after_journal();
+        adaptive_test_fault("publish-after-journal")?;
 
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -454,6 +851,7 @@ impl DerivedStore {
         persist_snapshot(&transaction, &snapshot, before.as_deref())?;
         set_active_generation(&transaction, &snapshot.generation_id)?;
         transaction.commit().map_err(storage_error)?;
+        adaptive_test_fault("publish-after-commit")?;
 
         finish_journal(&connection, journal_id, "COMMITTED")?;
         Ok(())
@@ -462,6 +860,27 @@ impl DerivedStore {
     /// Reconciles pending journal rows by comparing the active pointer with the
     /// before/after generations. Rows are never guessed through ambiguous state.
     pub fn recover_journal(&self) -> VrgResult<RecoveryReport> {
+        // The common no-pending path is passive and does not block readers.
+        {
+            let connection = self.lock()?;
+            let pending: bool = connection
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM journal WHERE state='PREPARING')",
+                    [],
+                    |r| r.get(0),
+                )
+                .map_err(storage_error)?;
+            if !pending {
+                return Ok(RecoveryReport::default());
+            }
+        }
+        // A live publisher's PREPARING row is not a crash. Reconcile only while
+        // publication is excluded, otherwise an observer could abort its journal.
+        let _publication = named_lock(&self.data_dir, "vrg-gc.lock", true)?;
+        self.recover_journal_locked()
+    }
+
+    fn recover_journal_locked(&self) -> VrgResult<RecoveryReport> {
         let connection = self.lock()?;
         let active = active_generation(&connection)?;
         let mut statement = connection
@@ -507,7 +926,9 @@ impl DerivedStore {
         target_generation: &str,
         expected_current: &str,
     ) -> VrgResult<()> {
-        self.recover_journal()?;
+        let _publication = named_lock(&self.data_dir, "vrg-gc.lock", true)?;
+        self.check_schema()?;
+        self.recover_journal_locked()?;
         let mut connection = self.lock()?;
         let current = active_generation(&connection)?;
         if current.as_deref() != Some(expected_current) {
@@ -566,6 +987,7 @@ impl DerivedStore {
         root_ids: &[String],
         limit: usize,
     ) -> VrgResult<Vec<SearchCandidate>> {
+        let _reader = self.acquire_reader_lease()?;
         let connection = self.lock()?;
         let Some(generation) = active_generation(&connection)? else {
             return Ok(Vec::new());
@@ -590,7 +1012,7 @@ impl DerivedStore {
                                   OR lower(c.relative_path) = lower(?3) \
                              THEN 1 ELSE 0 END \
                  FROM chunks c JOIN documents d USING (generation_id, root_id, relative_path) \
-                 WHERE c.generation_id = ?1 AND \
+                 WHERE c.generation_id = ?1 AND (json_array_length(?5)=0 OR c.root_id IN (SELECT value FROM json_each(?5))) AND \
                    (lower(c.relative_path) = lower(?2) OR lower(c.relative_path) = lower(?3) \
                     OR lower(d.title) = lower(?2)) \
                  ORDER BY c.relative_path, c.ordinal LIMIT ?4",
@@ -602,7 +1024,9 @@ impl DerivedStore {
                     generation,
                     normalized,
                     path_with_extension,
-                    MAX_QUERY_RESULTS as i64
+                    MAX_QUERY_RESULTS as i64,
+                    serde_json::to_string(root_ids)
+                        .map_err(|e| VrgError::Storage(e.to_string()))?
                 ],
                 |row| {
                     let mut candidate = candidate_from_row(row)?;
@@ -643,6 +1067,7 @@ impl DerivedStore {
         root_ids: &[String],
         limit: usize,
     ) -> VrgResult<Vec<SearchCandidate>> {
+        let _reader = self.acquire_reader_lease()?;
         let connection = self.lock()?;
         let Some(generation) = active_generation(&connection)? else {
             return Ok(Vec::new());
@@ -656,18 +1081,24 @@ impl DerivedStore {
                 "SELECT c.chunk_id, c.root_id, c.relative_path, c.revision, c.ordinal, \
                         c.start_byte, c.end_byte, c.body, d.title, bm25(chunk_fts) \
                  FROM chunk_fts JOIN chunks c \
-                   ON chunk_fts.generation_id = c.generation_id \
-                  AND chunk_fts.chunk_id = c.chunk_id \
+                   ON chunk_fts.rowid = c.object_rowid \
                  JOIN documents d \
                    ON d.generation_id = c.generation_id \
                   AND d.root_id = c.root_id AND d.relative_path = c.relative_path \
                  WHERE chunk_fts MATCH ?1 AND c.generation_id = ?2 \
+                   AND (json_array_length(?4)=0 OR c.root_id IN (SELECT value FROM json_each(?4))) \
                  ORDER BY bm25(chunk_fts) LIMIT ?3",
             )
             .map_err(storage_error)?;
         let rows = statement
             .query_map(
-                params![fts_query, generation, bounded_limit(limit)],
+                params![
+                    fts_query,
+                    generation,
+                    bounded_limit(limit),
+                    serde_json::to_string(root_ids)
+                        .map_err(|e| VrgError::Storage(e.to_string()))?
+                ],
                 |row| {
                     let mut candidate = candidate_from_row(row)?;
                     let bm25: f64 = row.get(9)?;
@@ -700,38 +1131,67 @@ impl DerivedStore {
         model_id: &str,
         root_ids: &[String],
     ) -> VrgResult<Vec<StoredVector>> {
+        self.read_vectors(model_id, root_ids, true)
+    }
+
+    /// Vector metadata for cosine ranking; does not decompress COLD text.
+    pub fn vector_catalog_for_model(
+        &self,
+        model_id: &str,
+        root_ids: &[String],
+    ) -> VrgResult<Vec<StoredVector>> {
+        self.read_vectors(model_id, root_ids, false)
+    }
+
+    fn read_vectors(
+        &self,
+        model_id: &str,
+        root_ids: &[String],
+        include_bodies: bool,
+    ) -> VrgResult<Vec<StoredVector>> {
+        let _reader = self.acquire_reader_lease()?;
         let connection = self.lock()?;
         let Some(generation) = active_generation(&connection)? else {
             return Ok(Vec::new());
         };
+        let body = if include_bodies { "c.body" } else { "NULL" };
         let mut statement = connection
-            .prepare(
+            .prepare(&format!(
                 "SELECT c.chunk_id, c.root_id, c.relative_path, c.revision, c.ordinal, \
-                        c.start_byte, c.end_byte, c.body, d.title, v.dimensions, v.vector_data \
+                        c.start_byte, c.end_byte, {body}, d.title, v.dimensions, v.vector_data \
                  FROM vectors v JOIN chunks c \
                    ON v.generation_id = c.generation_id AND v.chunk_id = c.chunk_id \
                  JOIN documents d \
                    ON d.generation_id = c.generation_id \
                   AND d.root_id = c.root_id AND d.relative_path = c.relative_path \
                  WHERE v.generation_id = ?1 AND v.model_id = ?2 \
+                   AND (json_array_length(?3)=0 OR c.root_id IN (SELECT value FROM json_each(?3))) \
                  ORDER BY c.root_id, c.relative_path, c.ordinal",
-            )
+            ))
             .map_err(storage_error)?;
         let rows = statement
-            .query_map(params![generation, model_id], |row| {
-                let chunk = chunk_from_row(row)?;
-                let title = row.get(8)?;
-                let dimensions: i64 = row.get(9)?;
-                let bytes: Vec<u8> = row.get(10)?;
-                let values = decode_vector(&bytes, dimensions as u32).map_err(|error| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        10,
-                        rusqlite::types::Type::Blob,
-                        Box::new(error),
-                    )
-                })?;
-                Ok((chunk, title, values))
-            })
+            .query_map(
+                params![
+                    generation,
+                    model_id,
+                    serde_json::to_string(root_ids)
+                        .map_err(|e| VrgError::Storage(e.to_string()))?
+                ],
+                |row| {
+                    let chunk = chunk_from_row(row)?;
+                    let title = row.get(8)?;
+                    let dimensions: i64 = row.get(9)?;
+                    let bytes: Vec<u8> = row.get(10)?;
+                    let values = decode_vector(&bytes, dimensions as u32).map_err(|error| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            10,
+                            rusqlite::types::Type::Blob,
+                            Box::new(error),
+                        )
+                    })?;
+                    Ok((chunk, title, values))
+                },
+            )
             .map_err(storage_error)?;
         let mut vectors = Vec::new();
         for row in rows {
@@ -749,6 +1209,7 @@ impl DerivedStore {
     }
 
     pub fn graph_edges_from(&self, source: &SourceRef) -> VrgResult<Vec<GraphEdge>> {
+        let _reader = self.acquire_reader_lease()?;
         let connection = self.lock()?;
         let Some(generation) = active_generation(&connection)? else {
             return Ok(Vec::new());
@@ -771,6 +1232,7 @@ impl DerivedStore {
     }
 
     pub fn all_graph_edges(&self, limit: usize) -> VrgResult<Vec<GraphEdge>> {
+        let _reader = self.acquire_reader_lease()?;
         let connection = self.lock()?;
         let Some(generation) = active_generation(&connection)? else {
             return Ok(Vec::new());
@@ -790,6 +1252,7 @@ impl DerivedStore {
     }
 
     pub fn load_document(&self, source: &SourceRef) -> VrgResult<Option<StoredDocument>> {
+        let _reader = self.acquire_reader_lease()?;
         let connection = self.lock()?;
         let Some(generation) = active_generation(&connection)? else {
             return Ok(None);
@@ -807,9 +1270,12 @@ impl DerivedStore {
     }
 
     fn lock(&self) -> VrgResult<std::sync::MutexGuard<'_, Connection>> {
-        self.connection
+        let connection = self
+            .connection
             .lock()
-            .map_err(|_| VrgError::Storage("database lock is poisoned".into()))
+            .map_err(|_| VrgError::Storage("database lock is poisoned".into()))?;
+        check_schema_connection(&connection)?;
+        Ok(connection)
     }
 }
 
@@ -834,6 +1300,16 @@ struct CandidateRow {
 }
 
 fn initialize_schema(connection: &Connection) -> VrgResult<()> {
+    let existing: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='schema_info')",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(storage_error)?;
+    if existing {
+        check_schema_connection(connection)?;
+    }
     connection
         .execute_batch(
             "BEGIN IMMEDIATE;
@@ -841,7 +1317,7 @@ fn initialize_schema(connection: &Connection) -> VrgResult<()> {
                  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
                  version INTEGER NOT NULL
              );
-             INSERT OR IGNORE INTO schema_info(singleton, version) VALUES (1, 1);
+             INSERT OR IGNORE INTO schema_info(singleton, version) VALUES (1, 2);
              CREATE TABLE IF NOT EXISTS generations (
                  generation_id TEXT PRIMARY KEY,
                  parent_id TEXT,
@@ -864,7 +1340,13 @@ fn initialize_schema(connection: &Connection) -> VrgResult<()> {
                  modified_unix_ms INTEGER,
                  PRIMARY KEY (generation_id, root_id, relative_path)
              );
-             CREATE TABLE IF NOT EXISTS chunks (
+             CREATE TABLE IF NOT EXISTS text_objects (
+                 object_id TEXT PRIMARY KEY,
+                 domain TEXT NOT NULL,
+                 raw_len INTEGER NOT NULL,
+                 payload BLOB NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS chunk_manifests (
                  generation_id TEXT NOT NULL,
                  chunk_id TEXT NOT NULL,
                  root_id TEXT NOT NULL,
@@ -873,19 +1355,15 @@ fn initialize_schema(connection: &Connection) -> VrgResult<()> {
                  ordinal INTEGER NOT NULL,
                  start_byte INTEGER NOT NULL,
                  end_byte INTEGER NOT NULL,
-                 body TEXT NOT NULL,
+                 object_id TEXT NOT NULL REFERENCES text_objects(object_id),
                  PRIMARY KEY (generation_id, chunk_id),
                  FOREIGN KEY (generation_id, root_id, relative_path)
                      REFERENCES documents(generation_id, root_id, relative_path)
              );
+             CREATE VIEW IF NOT EXISTS chunks AS SELECT m.*, o.payload AS body, o.rowid AS object_rowid
+                 FROM chunk_manifests m JOIN text_objects o USING(object_id);
              CREATE VIRTUAL TABLE IF NOT EXISTS chunk_fts USING fts5(
-                 generation_id UNINDEXED,
-                 chunk_id UNINDEXED,
-                 root_id UNINDEXED,
-                 relative_path UNINDEXED,
-                 title UNINDEXED,
-                 body,
-                 tokenize = 'unicode61'
+                 body, content='', contentless_delete=1, tokenize='unicode61'
              );
              CREATE TABLE IF NOT EXISTS edges (
                  generation_id TEXT NOT NULL REFERENCES generations(generation_id),
@@ -904,15 +1382,30 @@ fn initialize_schema(connection: &Connection) -> VrgResult<()> {
                  ON edges(generation_id, from_root, from_path);
              CREATE INDEX IF NOT EXISTS edges_to_idx
                  ON edges(generation_id, to_root, to_path);
-             CREATE TABLE IF NOT EXISTS vectors (
-                 generation_id TEXT NOT NULL,
-                 chunk_id TEXT NOT NULL,
+             CREATE TABLE IF NOT EXISTS vector_objects (
+                 object_id TEXT PRIMARY KEY, domain TEXT NOT NULL,
+                 input_object_id TEXT NOT NULL REFERENCES text_objects(object_id),
+                 model_id TEXT NOT NULL, dimensions INTEGER NOT NULL, vector_data BLOB NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS vector_manifests (
+                 generation_id TEXT NOT NULL, chunk_id TEXT NOT NULL,
                  model_id TEXT NOT NULL,
-                 dimensions INTEGER NOT NULL,
-                 vector_data BLOB NOT NULL,
-                 PRIMARY KEY (generation_id, chunk_id, model_id),
-                 FOREIGN KEY (generation_id, chunk_id)
-                     REFERENCES chunks(generation_id, chunk_id)
+                 object_id TEXT NOT NULL REFERENCES vector_objects(object_id),
+                 PRIMARY KEY (generation_id,chunk_id,model_id),
+                 FOREIGN KEY (generation_id,chunk_id) REFERENCES chunk_manifests(generation_id,chunk_id)
+             );
+             CREATE VIEW IF NOT EXISTS vectors AS SELECT m.generation_id,m.chunk_id,m.model_id,
+                 o.dimensions,o.vector_data FROM vector_manifests m JOIN vector_objects o USING(object_id);
+             CREATE TABLE IF NOT EXISTS generation_pins (
+                 generation_id TEXT NOT NULL REFERENCES generations(generation_id),
+                 pin_id TEXT NOT NULL, PRIMARY KEY(generation_id,pin_id)
+             );
+             CREATE TABLE IF NOT EXISTS adaptive_state (
+                 singleton INTEGER PRIMARY KEY CHECK(singleton=1),generation_id TEXT NOT NULL,
+                 proposal_id TEXT NOT NULL,fingerprint TEXT NOT NULL,state_json TEXT NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS adaptive_receipts (
+                 proposal_id TEXT PRIMARY KEY,fingerprint TEXT NOT NULL
              );
              CREATE TABLE IF NOT EXISTS journal (
                  journal_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1098,55 +1591,38 @@ fn persist_snapshot(
         }
     }
 
-    {
-        let mut chunk_statement = transaction
-            .prepare(
-                "INSERT INTO chunks \
-                 (generation_id, chunk_id, root_id, relative_path, revision, ordinal, start_byte, end_byte, body) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+    for chunk in &snapshot.chunks {
+        let object_id = text_object_id(&chunk.source.root_id, chunk.text.as_bytes());
+        let exists: bool = transaction
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM text_objects WHERE object_id=?1)",
+                [&object_id],
+                |r| r.get(0),
             )
             .map_err(storage_error)?;
-        let mut fts_statement = transaction
-            .prepare(
-                "INSERT INTO chunk_fts \
-                 (generation_id, chunk_id, root_id, relative_path, title, body) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            )
-            .map_err(storage_error)?;
-        let titles: BTreeMap<_, _> = snapshot
-            .documents
-            .iter()
-            .map(|document| (source_key(&document.source), document.title.as_str()))
-            .collect();
-        for chunk in &snapshot.chunks {
-            chunk_statement
-                .execute(params![
-                    snapshot.generation_id,
-                    chunk.id,
-                    chunk.source.root_id,
-                    chunk.source.relative_path,
-                    chunk.revision,
-                    i64::from(chunk.ordinal),
-                    i64::from(chunk.start_byte),
-                    i64::from(chunk.end_byte),
-                    chunk.text,
-                ])
-                .map_err(storage_error)?;
-            let title = titles
-                .get(&source_key(&chunk.source))
-                .copied()
-                .ok_or_else(|| VrgError::Storage("chunk title disappeared".into()))?;
-            fts_statement
-                .execute(params![
-                    snapshot.generation_id,
-                    chunk.id,
-                    chunk.source.root_id,
-                    chunk.source.relative_path,
-                    title,
-                    chunk.text,
-                ])
+        let inserted = if exists {
+            0
+        } else {
+            transaction.execute(
+            "INSERT INTO text_objects(object_id,domain,raw_len,payload) VALUES(?1,?2,?3,?4)",
+            params![object_id, chunk.source.root_id, chunk.text.len() as i64,
+                crate::adaptive_codec::encode_frame(chunk.text.as_bytes())?],
+        ).map_err(storage_error)?
+        };
+        if inserted != 0 {
+            let rowid = transaction.last_insert_rowid();
+            transaction
+                .execute(
+                    "INSERT INTO chunk_fts(rowid,body) VALUES(?1,?2)",
+                    params![rowid, chunk.text],
+                )
                 .map_err(storage_error)?;
         }
+        transaction.execute(
+            "INSERT INTO chunk_manifests(generation_id,chunk_id,root_id,relative_path,revision,ordinal,start_byte,end_byte,object_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            params![snapshot.generation_id,chunk.id,chunk.source.root_id,chunk.source.relative_path,chunk.revision,
+                i64::from(chunk.ordinal),i64::from(chunk.start_byte),i64::from(chunk.end_byte),object_id],
+        ).map_err(storage_error)?;
     }
 
     {
@@ -1174,24 +1650,25 @@ fn persist_snapshot(
         }
     }
 
-    {
-        let mut statement = transaction
-            .prepare(
-                "INSERT INTO vectors (generation_id, chunk_id, model_id, dimensions, vector_data) \
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-            )
-            .map_err(storage_error)?;
-        for vector in &snapshot.vectors {
-            statement
-                .execute(params![
-                    snapshot.generation_id,
-                    vector.chunk_id,
-                    vector.model_id,
-                    i64::from(vector.dimensions),
-                    encode_vector(&vector.values),
-                ])
-                .map_err(storage_error)?;
-        }
+    for vector in &snapshot.vectors {
+        let chunk = snapshot
+            .chunks
+            .iter()
+            .find(|c| c.id == vector.chunk_id)
+            .ok_or_else(|| VrgError::Storage("vector has no chunk".into()))?;
+        let input = text_object_id(&chunk.source.root_id, chunk.text.as_bytes());
+        let bytes = encode_vector(&vector.values);
+        let object_id = vector_object_id(
+            &chunk.source.root_id,
+            &input,
+            &vector.model_id,
+            vector.dimensions,
+            &bytes,
+        );
+        transaction.execute("INSERT OR IGNORE INTO vector_objects(object_id,domain,input_object_id,model_id,dimensions,vector_data) VALUES(?1,?2,?3,?4,?5,?6)",
+            params![object_id,chunk.source.root_id,input,vector.model_id,i64::from(vector.dimensions),bytes]).map_err(storage_error)?;
+        transaction.execute("INSERT INTO vector_manifests(generation_id,chunk_id,model_id,object_id) VALUES(?1,?2,?3,?4)",
+            params![snapshot.generation_id,vector.chunk_id,vector.model_id,object_id]).map_err(storage_error)?;
     }
     Ok(())
 }
@@ -1393,7 +1870,41 @@ fn chunk_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TextChunk> {
                 Box::new(error),
             )
         })?,
-        text: row.get(7)?,
+        text: match row.get_ref(7)? {
+            rusqlite::types::ValueRef::Text(bytes) => {
+                String::from_utf8(bytes.to_vec()).map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        7,
+                        rusqlite::types::Type::Text,
+                        Box::new(e),
+                    )
+                })?
+            }
+            rusqlite::types::ValueRef::Blob(bytes) => {
+                let raw = crate::adaptive_codec::decode_frame(bytes).map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        7,
+                        rusqlite::types::Type::Blob,
+                        Box::new(e),
+                    )
+                })?;
+                String::from_utf8(raw).map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        7,
+                        rusqlite::types::Type::Blob,
+                        Box::new(e),
+                    )
+                })?
+            }
+            rusqlite::types::ValueRef::Null => String::new(),
+            _ => {
+                return Err(rusqlite::Error::InvalidColumnType(
+                    7,
+                    "body".into(),
+                    rusqlite::types::Type::Null,
+                ));
+            }
+        },
     })
 }
 
@@ -1598,4 +2109,649 @@ fn restrict_permissions(_path: &Path, _mode: u32) -> VrgResult<()> {
 
 fn storage_error(error: rusqlite::Error) -> VrgError {
     VrgError::Storage(error.to_string())
+}
+
+fn text_object_id(domain: &str, bytes: &[u8]) -> String {
+    let mut digest = Sha256::new();
+    digest.update(b"vrg-text-v1\0");
+    digest.update((domain.len() as u64).to_le_bytes());
+    digest.update(domain.as_bytes());
+    digest.update(bytes);
+    hex::encode(digest.finalize())
+}
+
+fn vector_object_id(
+    domain: &str,
+    input: &str,
+    model: &str,
+    dimensions: u32,
+    bytes: &[u8],
+) -> String {
+    let mut digest = Sha256::new();
+    digest.update(b"vrg-vector-v1\0");
+    for item in [domain, input, model] {
+        digest.update((item.len() as u64).to_le_bytes());
+        digest.update(item.as_bytes());
+    }
+    digest.update(dimensions.to_le_bytes());
+    digest.update(bytes);
+    hex::encode(digest.finalize())
+}
+
+fn check_schema_connection(connection: &Connection) -> VrgResult<()> {
+    let version: i64 = connection
+        .query_row(
+            "SELECT version FROM schema_info WHERE singleton=1",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(storage_error)?;
+    if version != SCHEMA_VERSION {
+        return Err(VrgError::Storage(format!(
+            "unsupported derived-store schema version {version}; explicit isolated migration required"
+        )));
+    }
+    Ok(())
+}
+
+fn named_lock(directory: &Path, name: &str, exclusive: bool) -> VrgResult<File> {
+    let path = directory.join(name);
+    if fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err(VrgError::SymlinkRejected(
+            "derived lock cannot be a symlink".into(),
+        ));
+    }
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options
+            .mode(0o600)
+            .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
+    }
+    let file = options.open(&path).map_err(storage_io)?;
+    let result = if exclusive {
+        file.try_lock()
+    } else {
+        file.try_lock_shared()
+    };
+    match result {
+        Ok(()) => Ok(file),
+        Err(std::fs::TryLockError::WouldBlock) => Err(VrgError::Conflict(format!(
+            "derived-store {} lease is busy",
+            if exclusive { "exclusive" } else { "reader" }
+        ))),
+        Err(std::fs::TryLockError::Error(error)) => Err(storage_io(error)),
+    }
+}
+
+fn schema_lock(directory: &Path, exclusive: bool) -> VrgResult<File> {
+    named_lock(directory, "vrg-schema.lock", exclusive)
+}
+
+fn maintenance_plan_connection(
+    connection: &Connection,
+    retain: usize,
+) -> VrgResult<MaintenancePlan> {
+    if !(2..=10_000).contains(&retain) {
+        return Err(VrgError::InvalidConfig(
+            "retention requires 2..=10000 recent generations".into(),
+        ));
+    }
+    let current = active_generation(connection)?;
+    let mut generations=connection.prepare("SELECT generation_id,parent_id FROM generations ORDER BY created_unix_ms DESC,rowid DESC").map_err(storage_error)?;
+    let generations = generations
+        .query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
+        })
+        .map_err(storage_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(storage_error)?;
+    let mut protected = BTreeSet::new();
+    protected.extend(generations.iter().take(retain).map(|(id, _)| id.clone()));
+    if let Some(current) = &current {
+        protected.insert(current.clone());
+        if let Some((_, Some(parent))) = generations.iter().find(|(id, _)| id == current) {
+            protected.insert(parent.clone());
+        }
+    }
+    let mut protection_rows = Vec::new();
+    for sql in [
+        "SELECT generation_id,pin_id FROM generation_pins ORDER BY generation_id,pin_id",
+        "SELECT before_generation,after_generation FROM journal WHERE state='PREPARING' ORDER BY journal_id",
+        "SELECT before_generation,after_generation FROM journal WHERE state='COMMITTED' ORDER BY journal_id DESC LIMIT 1",
+        "SELECT generation_id,proposal_id FROM adaptive_state ORDER BY singleton",
+    ] {
+        let mut statement = connection.prepare(sql).map_err(storage_error)?;
+        let rows = statement
+            .query_map([], |r| {
+                Ok((r.get::<_, Option<String>>(0)?, r.get::<_, String>(1)?))
+            })
+            .map_err(storage_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(storage_error)?;
+        for (first, second) in rows {
+            if let Some(first) = &first {
+                protected.insert(first.clone());
+            }
+            if sql.contains("journal") {
+                protected.insert(second.clone());
+            }
+            protection_rows.push((first, second));
+        }
+    }
+    let state: Option<String> = connection
+        .query_row(
+            "SELECT state_json FROM adaptive_state WHERE singleton=1",
+            [],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(storage_error)?;
+    if let Some(state) = state {
+        let memories: Vec<crate::adaptive::StoredMemory> =
+            serde_json::from_str(&state).map_err(|e| {
+                VrgError::Storage(format!(
+                    "invalid adaptive references prevent maintenance: {e}"
+                ))
+            })?;
+        for span in memories.iter().flat_map(|memory| &memory.sources) {
+            let source = crate::adaptive::parse_source_id(&span.source_id).ok_or_else(|| {
+                VrgError::Storage("invalid adaptive source identity prevents maintenance".into())
+            })?;
+            let generation:Option<String>=connection.query_row("SELECT d.generation_id FROM documents d JOIN generations g USING(generation_id) WHERE d.root_id=?1 AND d.relative_path=?2 AND d.revision=?3 ORDER BY g.created_unix_ms DESC,g.rowid DESC LIMIT 1",params![source.root_id,source.relative_path,span.revision_sha256],|r|r.get(0)).optional().map_err(storage_error)?;
+            if let Some(generation) = generation {
+                protected.insert(generation);
+            }
+        }
+    }
+    let fingerprint = hex::encode(Sha256::digest(
+        serde_json::to_vec(&(generations.clone(), protection_rows))
+            .map_err(|e| VrgError::Storage(e.to_string()))?,
+    ));
+    let remove_generations = generations
+        .into_iter()
+        .map(|(id, _)| id)
+        .filter(|id| !protected.contains(id))
+        .take(32)
+        .collect();
+    Ok(MaintenancePlan {
+        expected_generation: current,
+        retain,
+        remove_generations,
+        protection_fingerprint: fingerprint,
+    })
+}
+
+fn retained_source_revisions_connection(
+    connection: &Connection,
+    excluded_generations: &[String],
+) -> VrgResult<Vec<(SourceRef, String)>> {
+    let excluded = serde_json::to_string(excluded_generations)
+        .map_err(|e| VrgError::Storage(e.to_string()))?;
+    let mut statement=connection.prepare("SELECT DISTINCT root_id,relative_path,revision FROM documents WHERE generation_id NOT IN (SELECT value FROM json_each(?1)) ORDER BY root_id,relative_path,revision").map_err(storage_error)?;
+    let mut revisions = statement
+        .query_map([excluded], |r| {
+            Ok((
+                SourceRef {
+                    root_id: r.get(0)?,
+                    relative_path: r.get(1)?,
+                },
+                r.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(storage_error)?
+        .collect::<Result<BTreeSet<_>, _>>()
+        .map_err(storage_error)?;
+    let state: Option<String> = connection
+        .query_row(
+            "SELECT state_json FROM adaptive_state WHERE singleton=1",
+            [],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(storage_error)?;
+    if let Some(state) = state {
+        let memories: Vec<crate::adaptive::StoredMemory> =
+            serde_json::from_str(&state).map_err(|e| {
+                VrgError::Storage(format!(
+                    "invalid adaptive references prevent archive maintenance: {e}"
+                ))
+            })?;
+        for span in memories.into_iter().flat_map(|memory| memory.sources) {
+            let source = crate::adaptive::parse_source_id(&span.source_id).ok_or_else(|| {
+                VrgError::Storage(
+                    "invalid adaptive source identity prevents archive maintenance".into(),
+                )
+            })?;
+            revisions.insert((source, span.revision_sha256));
+        }
+    }
+    Ok(revisions.into_iter().collect())
+}
+
+fn storage_stats_connection(connection: &Connection, directory: &Path) -> VrgResult<StorageStats> {
+    let count = |table: &str| -> VrgResult<u64> {
+        connection
+            .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
+            .map_err(storage_error)
+    };
+    let sum = |sql: &str| -> VrgResult<u64> {
+        connection
+            .query_row(sql, [], |r| r.get(0))
+            .map_err(storage_error)
+    };
+    let size = |name: &str| {
+        fs::metadata(directory.join(name))
+            .map(|m| m.len())
+            .unwrap_or(0)
+    };
+    let page_size: u64 = connection
+        .pragma_query_value(None, "page_size", |r| r.get(0))
+        .map_err(storage_error)?;
+    let free: u64 = connection
+        .pragma_query_value(None, "freelist_count", |r| r.get(0))
+        .map_err(storage_error)?;
+    Ok(StorageStats {
+        schema_version: SCHEMA_VERSION,
+        generations: count("generations")?,
+        documents: count("documents")?,
+        chunks: count("chunk_manifests")?,
+        text_objects: count("text_objects")?,
+        vector_objects: count("vector_objects")?,
+        logical_text_bytes: sum("SELECT coalesce(sum(raw_len),0) FROM text_objects")?,
+        payload_bytes: sum("SELECT coalesce(sum(length(payload)),0) FROM text_objects")?
+            + sum("SELECT coalesce(sum(length(vector_data)),0) FROM vector_objects")?,
+        database_bytes: size("vrg.sqlite3"),
+        wal_bytes: size("vrg.sqlite3-wal"),
+        shared_memory_bytes: size("vrg.sqlite3-shm"),
+        freelist_bytes: free * page_size,
+    })
+}
+
+fn migrate_schema(directory: &Path) -> VrgResult<bool> {
+    if !directory.is_absolute() || fs::canonicalize(directory).map_err(storage_io)? != directory {
+        return Err(VrgError::InvalidConfig(
+            "migration requires a canonical absolute isolated directory".into(),
+        ));
+    }
+    let _schema = schema_lock(directory, true)?;
+    let _sync = named_lock(directory, SYNC_LOCK_FILE, true)?;
+    let _gc = named_lock(directory, "vrg-gc.lock", true)?;
+    let database = directory.join("vrg.sqlite3");
+    if fs::symlink_metadata(&database)
+        .map_err(storage_io)?
+        .file_type()
+        .is_symlink()
+    {
+        return Err(VrgError::SymlinkRejected(
+            "migration database is a symlink".into(),
+        ));
+    }
+    let source = Connection::open(&database).map_err(storage_error)?;
+    let version: i64 = source
+        .query_row(
+            "SELECT version FROM schema_info WHERE singleton=1",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(storage_error)?;
+    if version == SCHEMA_VERSION {
+        return Ok(false);
+    }
+    if version != 1 {
+        return Err(VrgError::Storage(format!(
+            "unsupported migration source schema {version}"
+        )));
+    }
+    // A crash leaves its consistent backup/staging inspectable; a retry uses a
+    // fresh private attempt directory rather than trusting or overwriting them.
+    let mut attempt = None;
+    for slot in 0..32 {
+        let path = directory.join(format!("schema-migration-{slot:02}"));
+        match fs::create_dir(&path) {
+            Ok(()) => {
+                restrict_permissions(&path, 0o700)?;
+                attempt = Some(path);
+                break;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(storage_io(error)),
+        }
+    }
+    let attempt = attempt.ok_or_else(|| {
+        VrgError::Conflict(
+            "migration attempts exhausted; inspect retained backups before retry".into(),
+        )
+    })?;
+    let backup = attempt.join("schema1.rollback.sqlite3");
+    let stage = attempt.join("schema2.staging.sqlite3");
+    // SQLite performs checkpoint/removal of WAL itself. Never unlink live sidecars.
+    let mode: String = source
+        .query_row("PRAGMA journal_mode=DELETE", [], |r| r.get(0))
+        .map_err(storage_error)?;
+    if !mode.eq_ignore_ascii_case("delete") {
+        return Err(VrgError::Conflict(
+            "cannot migrate while WAL readers/writers are active".into(),
+        ));
+    }
+    // Exclusive locking mode retains SQLite's lock after COMMIT; take it before
+    // the backup so an uncooperative v1 writer cannot publish in the gap.
+    source
+        .execute_batch("PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE; COMMIT;")
+        .map_err(storage_error)?;
+    source
+        .execute("VACUUM INTO ?1", [backup.to_string_lossy().as_ref()])
+        .map_err(storage_error)?;
+    restrict_permissions(&backup, 0o600)?;
+    adaptive_test_fault("migration-before-stage")?;
+    let legacy = Connection::open(&backup).map_err(storage_error)?;
+    let mut candidate = Connection::open(&stage).map_err(storage_error)?;
+    candidate
+        .pragma_update(None, "foreign_keys", "ON")
+        .map_err(storage_error)?;
+    initialize_schema(&candidate)?;
+    let result = (|| -> VrgResult<()> {
+        let mut statement = legacy
+            .prepare(
+                "SELECT generation_id,parent_id,created_unix_ms FROM generations ORDER BY rowid",
+            )
+            .map_err(storage_error)?;
+        let generations = statement
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, Option<String>>(1)?,
+                    r.get::<_, i64>(2)?,
+                ))
+            })
+            .map_err(storage_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(storage_error)?;
+        drop(statement);
+        let transaction = candidate
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(storage_error)?;
+        for (generation, parent, created) in generations {
+            let snapshot = load_snapshot(&legacy, &generation)?;
+            persist_snapshot(&transaction, &snapshot, parent.as_deref())?;
+            transaction
+                .execute(
+                    "UPDATE generations SET created_unix_ms=?1 WHERE generation_id=?2",
+                    params![created, generation],
+                )
+                .map_err(storage_error)?;
+        }
+        adaptive_test_fault("migration-stage-writing")?;
+        transaction.commit().map_err(storage_error)?;
+        candidate
+            .execute(
+                "ATTACH DATABASE ?1 AS legacy",
+                [backup.to_string_lossy().as_ref()],
+            )
+            .map_err(storage_error)?;
+        for table in ["active_generation", "journal", "session_events"] {
+            candidate
+                .execute(
+                    &format!("INSERT INTO {table} SELECT * FROM legacy.{table}"),
+                    [],
+                )
+                .map_err(storage_error)?;
+        }
+        for table in ["index_sync_status", "source_change_revision"] {
+            candidate
+                .execute(&format!("DELETE FROM {table}"), [])
+                .map_err(storage_error)?;
+            candidate
+                .execute(
+                    &format!("INSERT INTO {table} SELECT * FROM legacy.{table}"),
+                    [],
+                )
+                .map_err(storage_error)?;
+        }
+        candidate
+            .execute(
+                "INSERT INTO index_sync_events SELECT * FROM legacy.index_sync_events",
+                [],
+            )
+            .map_err(storage_error)?;
+        candidate
+            .execute_batch("DETACH DATABASE legacy;")
+            .map_err(storage_error)?;
+        let integrity: String = candidate
+            .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+            .map_err(storage_error)?;
+        if integrity != "ok" {
+            return Err(VrgError::Recovery(
+                "migration integrity check failed".into(),
+            ));
+        }
+        let mut check = candidate
+            .prepare("PRAGMA foreign_key_check")
+            .map_err(storage_error)?;
+        if check
+            .query([])
+            .map_err(storage_error)?
+            .next()
+            .map_err(storage_error)?
+            .is_some()
+        {
+            return Err(VrgError::Recovery(
+                "migration foreign-key check failed".into(),
+            ));
+        }
+        Ok(())
+    })();
+    drop(candidate);
+    drop(legacy);
+    if let Err(error) = result {
+        let _ = fs::remove_file(&stage);
+        return Err(error);
+    }
+    restrict_permissions(&stage, 0o600)?;
+    File::open(&stage)
+        .map_err(storage_io)?
+        .sync_all()
+        .map_err(storage_io)?;
+    adaptive_test_fault("migration-before-publish")?;
+    fs::rename(&stage, &database).map_err(storage_io)?;
+    adaptive_test_fault("migration-after-publish")?;
+    File::open(directory)
+        .map_err(storage_io)?
+        .sync_all()
+        .map_err(storage_io)?;
+    drop(source);
+    Ok(true)
+}
+
+// Explicit thread-local fault injection exists only in unit-test builds. Normal
+// binaries have no environment variable or runtime switch for these faults.
+#[cfg(test)]
+thread_local! {static ADAPTIVE_FAULT:std::cell::Cell<Option<(&'static str,bool)>>=const {std::cell::Cell::new(None)};}
+#[cfg(test)]
+fn adaptive_test_fault(stage: &str) -> VrgResult<()> {
+    ADAPTIVE_FAULT.with(|fault| {
+        if let Some((expected, enospc)) = fault.get() {
+            if stage == expected {
+                fault.set(None);
+                return Err(if enospc {
+                    VrgError::Io(std::io::Error::from_raw_os_error(28))
+                } else {
+                    VrgError::Recovery(format!("synthetic interruption at {stage}"))
+                });
+            }
+        }
+        Ok(())
+    })
+}
+#[cfg(not(test))]
+#[inline]
+fn adaptive_test_fault(_stage: &str) -> VrgResult<()> {
+    Ok(())
+}
+
+#[cfg(test)]
+mod adaptive_storage_fault_tests {
+    use super::*;
+    struct Fixture(PathBuf);
+    impl Fixture {
+        fn new() -> Self {
+            let nonce = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path =
+                std::env::temp_dir().join(format!("vrg-am-fault-{}-{nonce}", std::process::id()));
+            fs::create_dir_all(&path).unwrap();
+            Self(fs::canonicalize(path).unwrap())
+        }
+        fn legacy(&self) -> PathBuf {
+            let path = self.0.join("legacy");
+            fs::create_dir(&path).unwrap();
+            let c = Connection::open(path.join("vrg.sqlite3")).unwrap();
+            c.execute_batch(include_str!("../tests/fixtures/adaptive/schema1.sql"))
+                .unwrap();
+            c.execute(
+                "INSERT INTO generations VALUES('original',NULL,1,0,0,1)",
+                [],
+            )
+            .unwrap();
+            c.execute("INSERT INTO active_generation VALUES(1,'original')", [])
+                .unwrap();
+            path
+        }
+    }
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            ADAPTIVE_FAULT.with(|f| f.set(None));
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+    fn snapshot(id: &str) -> IndexSnapshot {
+        IndexSnapshot {
+            generation_id: id.into(),
+            documents: Vec::new(),
+            chunks: Vec::new(),
+            edges: Vec::new(),
+            vectors: Vec::new(),
+        }
+    }
+    fn version(path: &Path) -> i64 {
+        Connection::open(path.join("vrg.sqlite3"))
+            .unwrap()
+            .query_row("SELECT version FROM schema_info", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    #[test]
+    fn am_t10_journal_interruption_before_after_publish_and_recovery_idempotence() {
+        for (stage, published) in [
+            ("publish-after-journal", false),
+            ("publish-after-commit", true),
+        ] {
+            let f = Fixture::new();
+            let store = DerivedStore::open(f.0.join("derived")).unwrap();
+            store.commit_generation(snapshot("before"), None).unwrap();
+            ADAPTIVE_FAULT.with(|fault| fault.set(Some((stage, false))));
+            assert!(
+                store
+                    .commit_generation(snapshot("after"), Some("before"))
+                    .is_err()
+            );
+            drop(store);
+            let store = DerivedStore::open(f.0.join("derived")).unwrap();
+            let report = store.recover_journal().unwrap();
+            assert_eq!(report.committed, usize::from(published));
+            assert_eq!(report.aborted, usize::from(!published));
+            assert_eq!(
+                store.current_generation_id().unwrap().as_deref(),
+                Some(if published { "after" } else { "before" })
+            );
+            let again = store.recover_journal().unwrap();
+            assert_eq!(again.committed + again.aborted, 0);
+        }
+    }
+
+    #[test]
+    fn am_t10_two_writers_reader_conflict_and_schema_handshake() {
+        let f = Fixture::new();
+        let path = f.0.join("derived");
+        let first = DerivedStore::open(&path).unwrap();
+        let second = DerivedStore::open(&path).unwrap();
+        first.commit_generation(snapshot("before"), None).unwrap();
+        let reader = first.acquire_reader_lease().unwrap();
+        assert!(
+            second
+                .commit_generation(snapshot("busy"), Some("before"))
+                .is_err()
+        );
+        drop(reader);
+        second
+            .commit_generation(snapshot("after"), Some("before"))
+            .unwrap();
+        assert!(
+            first
+                .commit_generation(snapshot("stale"), Some("before"))
+                .is_err()
+        );
+        let conn = Connection::open(path.join("vrg.sqlite3")).unwrap();
+        conn.execute("UPDATE schema_info SET version=99", [])
+            .unwrap();
+        assert!(
+            first
+                .commit_generation(snapshot("incompatible"), Some("after"))
+                .is_err()
+        );
+        let count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM generations WHERE generation_id='incompatible'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0);
+        conn.execute("UPDATE schema_info SET version=2", [])
+            .unwrap();
+        assert_eq!(
+            first.current_generation_id().unwrap().as_deref(),
+            Some("after")
+        );
+    }
+
+    #[test]
+    fn am_t10_migration_before_after_publish_retries_and_simulated_enospc() {
+        for (stage, enospc, published) in [
+            ("migration-before-stage", true, false),
+            ("migration-stage-writing", true, false),
+            ("migration-before-publish", false, false),
+            ("migration-after-publish", false, true),
+        ] {
+            let f = Fixture::new();
+            let path = f.legacy();
+            ADAPTIVE_FAULT.with(|fault| fault.set(Some((stage, enospc))));
+            let error = DerivedStore::migrate_schema(&path).unwrap_err();
+            if enospc {
+                assert!(matches!(error,VrgError::Io(ref io) if io.raw_os_error()==Some(28)));
+            }
+            assert_eq!(version(&path), if published { 2 } else { 1 });
+            let original =
+                Connection::open(path.join("schema-migration-00/schema1.rollback.sqlite3"))
+                    .unwrap();
+            let id: String = original
+                .query_row("SELECT generation_id FROM active_generation", [], |r| {
+                    r.get(0)
+                })
+                .unwrap();
+            assert_eq!(id, "original");
+            drop(original);
+            assert_eq!(DerivedStore::migrate_schema(&path).unwrap(), !published);
+            assert!(!DerivedStore::migrate_schema(&path).unwrap());
+            let store = DerivedStore::open(&path).unwrap();
+            assert_eq!(
+                store.current_generation_id().unwrap().as_deref(),
+                Some("original")
+            );
+        }
+    }
 }

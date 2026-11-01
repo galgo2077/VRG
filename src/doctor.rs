@@ -216,6 +216,109 @@ pub fn inspect(explicit: Option<&Path>, check_runtime: bool) -> DoctorReport {
                 "Configure an explicitly authorized Markdown root if search is needed.",
             );
         }
+        let policy = &config.adaptive_memory;
+        add(
+            &mut checks,
+            "adaptive_memory",
+            CheckStatus::Pass,
+            if policy.enabled {
+                "Adaptive Memory is explicitly enabled for the selected profile"
+            } else {
+                "Adaptive Memory is disabled; classic retrieval remains available"
+            },
+            "",
+        );
+        if policy.enabled {
+            add(
+                &mut checks,
+                "adaptive_classification",
+                CheckStatus::Unknown,
+                "Summary coverage and source revisions were not inspected by passive doctor",
+                "Use memory status and memory plan on an authorized profile; Codex proposes summaries and CLI validates them. No compaction or proposal is applied by doctor.",
+            );
+            match crate::adaptive_codec::ArchiveStore::inspect_existing(
+                &config.data_dir,
+                16,
+                32 * 1024 * 1024,
+            ) {
+                Ok(inspection) => {
+                    let permission_denied = inspection
+                        .diagnostic_codes
+                        .iter()
+                        .any(|code| code == "object_permission_denied");
+                    let status = if permission_denied && inspection.state != "corrupt" {
+                        CheckStatus::ActionRequired
+                    } else {
+                        match inspection.state.as_str() {
+                            "corrupt" => CheckStatus::Fail,
+                            "valid" => CheckStatus::Pass,
+                            "absent" | "not_initialized" => CheckStatus::Warn,
+                            _ => CheckStatus::Unknown,
+                        }
+                    };
+                    add(
+                        &mut checks,
+                        "adaptive_archive",
+                        status,
+                        format!(
+                            "Archive inspection {}: scanned={}, valid={}, corrupt={}, raw_bytes={}, diagnostics={}",
+                            inspection.state,
+                            inspection.scanned_objects,
+                            inspection.valid_objects,
+                            inspection.corrupt_objects,
+                            inspection.total_raw_bytes,
+                            inspection.diagnostic_codes.join(",")
+                        ),
+                        if status == CheckStatus::Pass {
+                            ""
+                        } else {
+                            "Inspect the bounded archive diagnostics. Preserve original sources and verified backups; doctor does not repair, archive or compact objects. Partial inspection does not certify the unexamined archive."
+                        },
+                    );
+                }
+                Err(crate::VrgError::Io(error))
+                    if error.kind() == std::io::ErrorKind::PermissionDenied =>
+                {
+                    add(
+                        &mut checks,
+                        "adaptive_archive",
+                        CheckStatus::ActionRequired,
+                        "Archive inspection permission_denied: existing derived archive cannot be read",
+                        "Review the selected profile and its existing archive permissions without broadening source access.",
+                    );
+                }
+                Err(_) => add(
+                    &mut checks,
+                    "adaptive_archive",
+                    CheckStatus::Fail,
+                    "Archive inspection failed: unsafe, corrupt or inaccessible derived archive",
+                    "Inspect archive paths and integrity without deleting sources or bypassing symlink checks. Doctor made no archive repairs.",
+                ),
+            }
+            let observed_bytes = ["vrg.sqlite3", "vrg.sqlite3-wal", "vrg.sqlite3-shm"]
+                .iter()
+                .filter_map(|name| fs::symlink_metadata(config.data_dir.join(name)).ok())
+                .filter(|meta| meta.is_file() && !meta.file_type().is_symlink())
+                .map(|meta| meta.len())
+                .fold(0u64, u64::saturating_add);
+            let pressure =
+                observed_bytes > policy.soft_store_budget_mib.saturating_mul(1024 * 1024);
+            add(
+                &mut checks,
+                "adaptive_capacity",
+                if pressure {
+                    CheckStatus::Warn
+                } else {
+                    CheckStatus::Unknown
+                },
+                if pressure {
+                    "capacity_pressure: observed database files exceed the soft store budget; protected data is preserved"
+                } else {
+                    "Observed database file metadata does not establish total archive capacity, free space or integrity"
+                },
+                "Review memory stats and memory maintain before any explicitly authorized maintenance; doctor never compacts storage.",
+            );
+        }
         let db = config.data_dir.join("vrg.sqlite3");
         match fs::symlink_metadata(&db) {
             Ok(meta) if meta.file_type().is_symlink() || !meta.is_file() => add(
@@ -656,9 +759,17 @@ pub fn repair_plan(
     let Ok(config_text) = std::str::from_utf8(&config_bytes) else {
         return empty();
     };
-    let Ok(config) = toml::from_str::<VrgConfig>(config_text) else {
+    if toml::from_str::<VrgConfig>(config_text).is_err() {
+        return empty();
+    }
+    // Use the same project-scoped resolution as the CLI, while retaining the
+    // exact original bytes as an optimistic repair precondition below.
+    let Ok(config) = VrgConfig::load(&canonical_config_path) else {
         return empty();
     };
+    if fs::read(&canonical_config_path).ok().as_deref() != Some(config_bytes.as_slice()) {
+        return empty();
+    }
     if config.validate().is_err() || config.validate_layout().is_err() {
         return empty();
     }

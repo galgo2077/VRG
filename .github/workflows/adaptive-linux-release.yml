@@ -1,0 +1,134 @@
+name: Adaptive Memory Linux release package
+
+on:
+  workflow_dispatch:
+    inputs:
+      validated_commit:
+        description: Exact 40-character commit already validated against the Adaptive Memory catalog
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: adaptive-linux-package-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CARGO_TARGET_DIR: ${{ runner.temp }}/adaptive-linux-target
+      ORT_LIB_LOCATION: ${{ runner.temp }}/adaptive-linux-ort
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require the exact reviewed revision and Linux host
+        env:
+          VALIDATED_COMMIT: ${{ inputs.validated_commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$VALIDATED_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          test "$VALIDATED_COMMIT" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$VALIDATED_COMMIT"
+          test "$(uname -m)" = x86_64
+          test "$(uname -s)" = Linux
+      - name: Prepare the pinned toolchain and locked Linux dependencies explicitly
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.0 --profile minimal
+          test "$(rustc +1.98.0 -vV | sed -n 's/^host: //p')" = x86_64-unknown-linux-gnu
+          cargo +1.98.0 fetch --locked --target x86_64-unknown-linux-gnu
+      - name: Prepare the pinned native runtime before the offline build
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --disable --fail --location --silent --show-error \
+            --connect-timeout 15 --max-time 900 \
+            'https://cdn.pyke.io/0/pyke:ort-rs/ms@1.31.0/x86_64-unknown-linux-gnu.tar.lzma2' \
+            -o "$RUNNER_TEMP/adaptive-linux-ort.tar.lzma2"
+          python3 - <<'PY'
+          import hashlib, lzma, os, pathlib, shutil, tarfile, tomllib
+          lock = tomllib.loads(pathlib.Path('Cargo.lock').read_text())
+          assert any(p['name'] == 'ort-sys' and p['version'] == '2.0.0-rc.15' for p in lock['package'])
+          source = pathlib.Path(os.environ['RUNNER_TEMP']) / 'adaptive-linux-ort.tar.lzma2'
+          expected = '02aac0d3b4927026292088986d7a377c657c88761b1c068be217a67b35447678'
+          assert hashlib.file_digest(source.open('rb'), 'sha256').hexdigest() == expected
+          destination = pathlib.Path(os.environ['ORT_LIB_LOCATION'])
+          destination.mkdir(mode=0o700)
+          total = 0
+          with lzma.LZMAFile(source, format=lzma.FORMAT_RAW,
+                            filters=[{'id': lzma.FILTER_LZMA2, 'dict_size': 1 << 26}]) as raw:
+              with tarfile.open(fileobj=raw, mode='r|') as archive:
+                  for item in archive:
+                      relative = pathlib.PurePosixPath(item.name)
+                      assert not relative.is_absolute() and '..' not in relative.parts
+                      target = destination.joinpath(*relative.parts)
+                      if item.isdir():
+                          target.mkdir(parents=True, exist_ok=True)
+                          continue
+                      assert item.isfile(), 'native archive links and special entries are prohibited'
+                      total += item.size
+                      assert 0 <= item.size <= 256 * 1024 * 1024 and total <= 512 * 1024 * 1024
+                      target.parent.mkdir(parents=True, exist_ok=True)
+                      with archive.extractfile(item) as incoming, target.open('xb') as outgoing:
+                          shutil.copyfileobj(incoming, outgoing, 1024 * 1024)
+          assert (destination / 'libonnxruntime.a').is_file()
+          (destination / 'NATIVE-PROVENANCE.txt').write_text(
+              'ort-sys=2.0.0-rc.15\nupstream_distribution=pyke:ort-rs/ms@1.31.0\n'
+              f'compressed_distribution_sha256={expected}\n')
+          PY
+      - name: Build Linux candidate with offline Cargo and native downloads disabled
+        env:
+          CARGO_NET_OFFLINE: 'true'
+          ORT_OFFLINE: '1'
+        run: cargo +1.98.0 build --release --locked --offline --target x86_64-unknown-linux-gnu
+      - name: Package exact binary and public documentation
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml","rb"))["package"]["version"])')
+          stage="$RUNNER_TEMP/vrg-v${version}-linux-x86_64"
+          mkdir -m 700 "$stage"
+          cp "$CARGO_TARGET_DIR/x86_64-unknown-linux-gnu/release/vrg" "$stage/vrg"
+          cp LICENSE-* README.md CHANGELOG.md Cargo.lock "$stage/"
+          cp docs/public/ADAPTIVE_MEMORY.md docs/public/ADAPTIVE_MEMORY.es.md "$stage/"
+          cp "$ORT_LIB_LOCATION/NATIVE-PROVENANCE.txt" "$stage/"
+          mkdir "$stage/native-notices"
+          find "$ORT_LIB_LOCATION" -maxdepth 2 -type f \( -iname '*license*' -o -iname '*notice*' \) -exec cp '{}' "$stage/native-notices/" \;
+          {
+            printf 'commit=%s\n' "$GITHUB_SHA"
+            printf 'architecture=x86_64-unknown-linux-gnu\n'
+            printf 'platform='; uname -smr
+            rustc +1.98.0 -Vv
+            ldd "$stage/vrg"
+            getconf GNU_LIBC_VERSION
+          } > "$stage/BUILD-ENVIRONMENT.txt"
+          test "$("$stage/vrg" --version)" = "vrg $version"
+          printf 'VRG_PACKAGE_STAGE=%s\n' "$stage" >> "$GITHUB_ENV"
+      - name: Check the packaged binary outside the checkout with synthetic data
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          python3 "$GITHUB_WORKSPACE/scripts/ci_distribution_smoke.py" "$VRG_PACKAGE_STAGE/vrg"
+          "$VRG_PACKAGE_STAGE/vrg" memory --help >/dev/null
+      - name: Create the Linux archive and verify checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          package=$(basename "$VRG_PACKAGE_STAGE")
+          mkdir -p dist
+          tar -C "$RUNNER_TEMP" -czf "dist/${package}.tar.gz" "$package"
+          cd dist
+          sha256sum "${package}.tar.gz" > SHA256SUMS.txt
+          sha256sum --check SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: adaptive-linux-x86_64-package
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14

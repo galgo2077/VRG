@@ -55,6 +55,7 @@ pub struct SetupOptions {
     pub model_dir: Option<PathBuf>,
     pub memory_dir: Option<PathBuf>,
     pub synthetic_root: bool,
+    pub adaptive_memory: bool,
 }
 
 fn invalid(message: impl Into<String>) -> VrgError {
@@ -582,6 +583,10 @@ pub fn plan_setup(options: &SetupOptions, mut extra: Vec<PlannedFile>) -> VrgRes
         roots,
         data_dir: data,
         semantic_model: model,
+        adaptive_memory: crate::config::AdaptiveMemoryConfig {
+            enabled: options.adaptive_memory,
+            ..Default::default()
+        },
         ..VrgConfig::default()
     };
     config.validate()?;
