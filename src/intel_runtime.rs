@@ -132,6 +132,21 @@ fn same_inode(a: &fs::Metadata, b: &fs::Metadata) -> bool {
 fn same_inode(_: &fs::Metadata, _: &fs::Metadata) -> bool {
     false
 }
+// Never unlink here: a same-UID process can replace the pathname at any time.
+fn rollback_promoted(destination: &Path, original: &fs::Metadata, reason: &str) -> VrgError {
+    let state = match fs::symlink_metadata(destination) {
+        Ok(meta) if meta.is_file() && same_inode(&meta, original) => {
+            "destination retains the created link"
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => "destination is absent",
+        Ok(_) => "destination changed externally",
+        Err(_) => "destination could not be inspected",
+    };
+    VrgError::Recovery(format!(
+        "{reason}; {state}: {}; no destination was removed or activated; verify size, SHA-256 and ABI before reuse",
+        destination.display()
+    ))
+}
 struct Staging(PathBuf, fs::Metadata);
 impl Drop for Staging {
     fn drop(&mut self) {
@@ -311,11 +326,23 @@ fn install_runtime_with_curl(
     check_path(destination)?;
     match fs::hard_link(&stage.0, destination) {
         Ok(()) => {
-            let promoted = fs::symlink_metadata(destination)?;
-            if !same_inode(&stage.1, &promoted) {
-                return Err(invalid("runtime promotion identity mismatch"));
+            match fs::symlink_metadata(destination) {
+                Ok(promoted) if promoted.is_file() && same_inode(&stage.1, &promoted) => (),
+                _ => {
+                    return Err(rollback_promoted(
+                        destination,
+                        &stage.1,
+                        "runtime promotion identity mismatch",
+                    ));
+                }
             }
-            File::open(parent)?.sync_all()?;
+            if let Err(e) = File::open(parent).and_then(|f| f.sync_all()) {
+                return Err(rollback_promoted(
+                    destination,
+                    &stage.1,
+                    &format!("runtime directory synchronization failed: {e}"),
+                ));
+            }
             Ok(true)
         }
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {

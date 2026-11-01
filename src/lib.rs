@@ -18,6 +18,8 @@ pub mod vault;
 
 #[cfg(test)]
 mod intel_runtime;
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+mod runtime_probe;
 mod engine;
 mod note_write;
 

@@ -229,3 +229,24 @@ fn rejected_abi_never_promotes_a_verified_download() {
     assert!(!dest.exists());
     fs::remove_dir_all(p).unwrap();
 }
+
+#[cfg(unix)]
+#[test]
+fn recovery_keeps_both_own_link_and_changed_destination() {
+    let p = fixture();
+    let stage = p.join("stage");
+    let dest = p.join("runtime");
+    fs::write(&stage, b"ours").unwrap();
+    let original = fs::metadata(&stage).unwrap();
+    fs::hard_link(&stage, &dest).unwrap();
+    let result = super::rollback_promoted(&dest, &original, "synthetic fsync failure");
+    assert!(matches!(result, crate::error::VrgError::Recovery(_)));
+    assert!(result.to_string().contains("verify size, SHA-256 and ABI"));
+    assert_eq!(fs::read(&dest).unwrap(), b"ours");
+    fs::remove_file(&dest).unwrap();
+    fs::write(&dest, b"external").unwrap();
+    let result = super::rollback_promoted(&dest, &original, "synthetic identity failure");
+    assert!(result.to_string().contains("changed externally"));
+    assert_eq!(fs::read(&dest).unwrap(), b"external");
+    fs::remove_dir_all(p).unwrap();
+}

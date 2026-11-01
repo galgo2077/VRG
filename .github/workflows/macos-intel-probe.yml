@@ -29,6 +29,12 @@ jobs:
         run: cargo +1.98.0 test --release --locked --offline --target x86_64-apple-darwin --test doctor_passive intel_setup_rejects_runtime_without_api_24_without_panicking
       - name: Verify private runtime staging and ABI rejection
         run: cargo +1.98.0 test --release --locked --offline --target x86_64-apple-darwin --lib intel_runtime::tests
+      - name: Verify isolated ABI probe with synthetic libraries
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo +1.98.0 test --release --locked --offline --target x86_64-apple-darwin --lib runtime_probe::tests
+          cargo +1.98.0 test --release --locked --offline --target x86_64-apple-darwin --test doctor_passive hidden_intel_abi_probe_distinguishes_api_24
       - name: Exercise text-mode distribution outside checkout
         shell: bash
         run: |

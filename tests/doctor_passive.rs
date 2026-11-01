@@ -334,3 +334,39 @@ fn intel_setup_rejects_runtime_without_api_24_without_panicking() {
     assert!(!root.join("data").exists());
     fs::remove_dir_all(root).unwrap();
 }
+
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+#[test]
+fn hidden_intel_abi_probe_distinguishes_api_24() {
+    let root = fixture();
+    let source = root.join("fake.c");
+    let library = root.join("fake.dylib");
+    let binary = env!("CARGO_BIN_EXE_vrg");
+    for valid in [false, true] {
+        let result = if valid { "(const void*)1" } else { "NULL" };
+        fs::write(&source, format!(r#"
+            #include <stddef.h>
+            typedef struct {{ const void *(*GetApi)(unsigned); const char *(*GetVersionString)(void); }} Base;
+            static const void *get_api(unsigned n) {{ (void)n; return {result}; }}
+            static const char *get_version(void) {{ return "1.24.1"; }}
+            const Base *OrtGetApiBase(void) {{ static const Base b = {{ get_api, get_version }}; return &b; }}
+        "#)).unwrap();
+        assert!(
+            std::process::Command::new("cc")
+                .args(["-dynamiclib", "-o"])
+                .arg(&library)
+                .arg(&source)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let outcome = std::process::Command::new(binary)
+            .env_clear()
+            .arg("__verify-onnx-runtime")
+            .arg(&library)
+            .output()
+            .unwrap();
+        assert_eq!(outcome.status.success(), valid);
+    }
+    fs::remove_dir_all(root).unwrap();
+}

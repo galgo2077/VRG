@@ -31,6 +31,9 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    #[command(name = "__verify-onnx-runtime", hide = true)]
+    VerifyOnnxRuntime { path: PathBuf },
     /// Plan or configure an explicitly authorized VRG profile.
     Setup(SetupArgs),
     /// Inspect configuration without opening or changing derived storage.
@@ -207,6 +210,8 @@ enum MemoryCommand {
 pub async fn run() -> VrgResult<()> {
     let cli = Cli::parse();
     match cli.command {
+        #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+        Command::VerifyOnnxRuntime { path } => crate::runtime_probe::inspect_api(&path),
         Command::Setup(args) => run_setup(cli.config, args),
         Command::Doctor(args) => run_doctor(cli.config, args),
         Command::Init { output } => {
