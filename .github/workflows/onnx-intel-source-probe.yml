@@ -22,7 +22,7 @@ jobs:
         # Upstream guards its Clang false-positive suppression with HAS_ARRAY_BOUNDS.
         # The flagged acc[4..7] accesses are inside `if constexpr (NCols4 == 8)`.
         env:
-          CXXFLAGS: -DHAS_ARRAY_BOUNDS=1
+          CXXFLAGS: -DHAS_ARRAY_BOUNDS=
         shell: bash
         run: |
           set -euo pipefail
