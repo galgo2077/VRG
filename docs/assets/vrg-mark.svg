@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="160" height="160" viewBox="0 0 160 160" role="img" aria-labelledby="title desc">
+<title id="title">VRG — Vault RAG Graph</title><desc id="desc">Open book beneath a rounded arch, connected to a small graph of notes.</desc>
+<g fill="none" stroke="#202623" stroke-linecap="round" stroke-linejoin="round">
+<path fill="#202623" stroke="none" d="M65 66C65 45 76 33 89 33s24 12 24 33v34H65V66Z"/>
+<path d="M27 112c19-8 35-7 53 10 18-17 34-18 53-10l-6 14c-20-6-30-3-47 14-17-17-27-20-47-14l-6-14Z" stroke-width="4"/>
+<path d="M38 100c17-4 30 2 42 17 12-15 25-21 42-17" stroke-width="4"/>
+<path d="M80 120v17" stroke-width="3"/>
+<path d="M33 69 22 57 34 42 20 27" stroke-width="2.7"/>
+<path d="M127 79 143 65 130 48 141 32" stroke-width="2.7"/>
+<path d="M115 28 126 18 141 32" stroke-width="2.7"/>
+<path d="M43 24 58 19 63 34" stroke-width="2.7"/>
+</g>
+<g fill="#202623"><circle cx="20" cy="27" r="5"/><circle cx="34" cy="42" r="5"/><circle cx="22" cy="57" r="5"/><circle cx="33" cy="69" r="5"/><circle cx="43" cy="24" r="5"/><circle cx="58" cy="19" r="5"/><circle cx="63" cy="34" r="5"/><circle cx="115" cy="28" r="5"/><circle cx="126" cy="18" r="5"/><circle cx="141" cy="32" r="5"/><circle cx="130" cy="48" r="5"/><circle cx="143" cy="65" r="5"/><circle cx="127" cy="79" r="5"/></g>
+</svg>

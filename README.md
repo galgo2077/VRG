@@ -1,5 +1,9 @@
 # VRG — Vault RAG Graph
 
+![VRG — Vault RAG Graph](docs/assets/vrg-banner.svg)
+
+**Maintained by [galgo2077](https://github.com/galgo2077)** · [Website](https://galgo2077.github.io/VRG/) · [Setup](https://galgo2077.github.io/VRG/setup.html) · [Troubleshooting](https://galgo2077.github.io/VRG/#troubleshooting) · [Support development](https://buymeacoffee.com/galgo2077?new=1)
+
 VRG is a local-first Rust backend for retrieving information from explicitly authorized Markdown roots. It combines SQLite/FTS5 text search, optional local embeddings, and a graph of explicit note relations. The original notes remain authoritative; indexes, vectors, and graph data are rebuildable derived state.
 
 The CLI and a local stdio Model Context Protocol (MCP) server expose attributed results with source revisions and freshness information. Codex integration can use project hooks to reconcile approved roots and check selective operational documentation at the end of a turn. MCP tools remain read-only: the assistant uses normal file tools for any separately authorized documentation edits.
@@ -38,6 +42,10 @@ The official crates.io package can also be installed from source. Version `0.1.1
 cargo install vrg --locked
 vrg --version
 ```
+
+## Installation help
+
+See the [common issues section](https://galgo2077.github.io/VRG/#troubleshooting) for Cargo dependencies, PATH, MCP configuration, hook trust, synchronization, model files and Linux compatibility. More detailed instructions are in [the setup guide](docs/public/SETUP.md) and [la guía en español](docs/public/SETUP.es.md).
 
 ## Privacy and operational boundaries
 
