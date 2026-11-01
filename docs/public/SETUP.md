@@ -54,25 +54,22 @@ That command builds from source; it does **not** download an official binary and
 
 ## 3. Run a safe smoke test with synthetic notes
 
-Do **not** grant VRG access to real notes just to test an installation. After compiling from step 2, run this from the repository checkout. This script writes only to the shown demo paths and refuses to overwrite an existing demo config:
+Do **not** grant VRG access to real notes just to test an installation. After compiling from step 2, run this from the repository checkout. This script creates a unique temporary directory and never overwrites an existing demo:
 
 ```sh
-mkdir -p "$HOME/vrg-demo-notes" "$HOME/.config/vrg"
-printf '# Alpha\n\nThe blue zafiro compass identifies this demo note.\n' > "$HOME/vrg-demo-notes/demo.md"
-DEMO_CFG="$HOME/.config/vrg/demo.toml"
-if test -e "$DEMO_CFG"; then
-  echo "Demo config already exists; inspect it rather than overwrite." >&2
-else
-  cat > "$DEMO_CFG" <<EOF
-data_dir = "$HOME/.local/share/vrg-demo-derived"
+DEMO_BASE="$(mktemp -d /tmp/vrg-demo.XXXXXXXX)" || { echo "Cannot create demo directory" >&2; exit 1; }
+mkdir "$DEMO_BASE/notes"
+printf '# Demo\n\nThe blue zafiro compass is a synthetic test.\n' > "$DEMO_BASE/notes/demo.md"
+DEMO_CFG="$DEMO_BASE/config.toml"
+cat > "$DEMO_CFG" <<EOF
+data_dir = "$DEMO_BASE/data"
 capture_session_events = false
 
 [[roots]]
 id = "demo"
-path = "$HOME/vrg-demo-notes"
+path = "$DEMO_BASE/notes"
 allowed_files = ["demo.md"]
 EOF
-fi
 ./target/release/vrg --config "$DEMO_CFG" status
 ./target/release/vrg --config "$DEMO_CFG" index
 ./target/release/vrg --config "$DEMO_CFG" search "zafiro compass" --root demo --text-only

@@ -14,23 +14,20 @@ test -x target/release/vrg
 ./target/release/vrg --help</code></pre>
 <p class="docs-small">Compilación desde código, no un ejecutable descargado ni una instalación crates.io. Con todo en caché: <code>cargo build --release --locked --offline</code>.</p><div class="setup-alt"><strong>Alternativa Cargo Git (aún no verificada en un equipo limpio)</strong><pre class="setup-terminal"><code>cargo install --git https://github.com/galgo2077/VRG.git --tag v0.4.0-f4 --locked
 vrg --help</code></pre><p>También compila el código fuente en tu máquina. Si falla, utiliza la ruta de clonación anterior.</p></div></section>
-<section class="docs-section" id="demo"><p class="kicker">02 / PRUEBA AISLADA</p><h2>Prueba sin dar acceso a Obsidian.</h2><p>Esta prueba crea una nota de demostración y una configuración aislada. Si ya existe la configuración, revísala antes de sobrescribir.</p>
-<pre class="setup-terminal"><code>mkdir -p "$HOME/vrg-demo-notes" "$HOME/.config/vrg"
-printf '# Demo\n\nLa brújula zafiro azul es una prueba sintética.\n' &gt; "$HOME/vrg-demo-notes/demo.md"
-DEMO_CFG="$HOME/.config/vrg/demo.toml"
-if test -e "$DEMO_CFG"; then
-  echo "Revisa demo.toml antes de continuar" &gt;&amp;2
-else
-  cat &gt; "$DEMO_CFG" &lt;&lt;EOF
-data_dir = "$HOME/.local/share/vrg-demo-derived"
+<section class="docs-section" id="demo"><p class="kicker">02 / PRUEBA AISLADA</p><h2>Prueba sin dar acceso a Obsidian.</h2><p>Esta prueba crea una nota de demostración y una configuración aislada. Se crea un directorio temporal único.</p>
+<pre class="setup-terminal"><code>DEMO_BASE="$(mktemp -d /tmp/vrg-demo.XXXXXXXX)" || { echo "Cannot create demo directory" &gt;&amp;2; exit 1; }
+mkdir "$DEMO_BASE/notes"
+printf '# Demo\n\nLa brujula zafiro azul es una prueba sintetica.\n' &gt; "$DEMO_BASE/notes/demo.md"
+DEMO_CFG="$DEMO_BASE/config.toml"
+cat &gt; "$DEMO_CFG" &lt;&lt;EOF
+data_dir = "$DEMO_BASE/data"
 capture_session_events = false
 
 [[roots]]
 id = "demo"
-path = "$HOME/vrg-demo-notes"
+path = "$DEMO_BASE/notes"
 allowed_files = ["demo.md"]
 EOF
-fi
 ./target/release/vrg --config "$DEMO_CFG" status
 ./target/release/vrg --config "$DEMO_CFG" index
 ./target/release/vrg --config "$DEMO_CFG" search "brújula zafiro" --root demo --text-only</code></pre>
