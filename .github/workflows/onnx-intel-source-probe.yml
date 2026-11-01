@@ -19,6 +19,10 @@ jobs:
           test "$(git rev-parse HEAD)" = 470ae16099a74fe05e31f2530489332c0525edb5
           git submodule update --init --recursive --depth 1
       - name: Build native CPU shared runtime
+        # Upstream guards its Clang false-positive suppression with HAS_ARRAY_BOUNDS.
+        # The flagged acc[4..7] accesses are inside `if constexpr (NCols4 == 8)`.
+        env:
+          CXXFLAGS: -DHAS_ARRAY_BOUNDS=1
         shell: bash
         run: |
           set -euo pipefail
