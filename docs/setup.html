@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#080c17"><meta name="description" content="VRG installation: download the Rust source release, compile it, test an isolated Markdown vault, and connect read-only MCP to Codex."><title>Install & Verify — VRG</title><link rel="stylesheet" href="./site.css"><link rel="stylesheet" href="./guide.css"><link rel="stylesheet" href="./setup.css"></head><body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="header"><div class="shell nav"><a class="brand" href="./index.html"><span class="brand-mark">V<span>●</span></span><span>VRG<span class="brand-dot">.</span></span></a><nav class="nav-links"><a href="./index.html">Home</a><a href="#install">Install</a><a href="#demo">Try it</a><a href="#codex">Codex</a><a href="#verify">Verify</a></nav><div class="nav-right"><a class="lang" href="./es/setup.html" lang="es" hreflang="es">ES</a><a class="nav-github" href="https://github.com/galgo2077/VRG/releases/tag/v0.4.0-f4" rel="noopener noreferrer">Release ↗</a></div></div></header>
+<main id="main"><section class="shell docs-heading setup-header"><p class="kicker">VRG / BUILD FROM SOURCE / PHASE 4</p><h1>Install.<br><span>Connect. Verify.</span></h1><p>A real setup path for the source release—start with a safe demo before connecting your own Markdown knowledge.</p><div class="install-channels"><div><strong>v0.4.0-f4</strong><span>GitHub source release</span></div><div><strong>Rust 1.89+</strong><span>Required toolchain</span></div><div><strong>Void Linux</strong><span>Locally validated environment</span></div></div><div class="docs-notice"><strong>Build required</strong><span>This release has no downloadable executable assets. The project's crates.io package has not been verified. Its Cargo package version is 0.1.0; the v0.4.0-f4 tag names the Phase 4 milestone. Do not mistake the two.</span></div></section>
+<div class="shell docs-layout"><aside class="docs-toc" aria-label="Setup contents"><strong>GET STARTED</strong><a href="#install">1. Download & compile</a><a href="#demo">2. Safe test vault</a><a href="#codex">3. Connect Codex MCP</a><a href="#hooks">4. Hooks & memory</a><a href="#verify">5. Verify everything</a><a href="#trouble">Troubleshooting</a><a href="#release">Distribution status</a></aside>
+<div class="docs-body">
+<section class="docs-section" id="install"><p class="kicker">01 / REQUIREMENTS & SOURCE</p><h2>Start with the F4 tag.</h2><p>Install Git, Rust + Cargo (1.89 or later) from <a class="setup-link" href="https://www.rust-lang.org/tools/install" rel="noopener noreferrer">the official Rust guide ↗</a> and the compiler/build tools required by your platform. On Void Linux, verify distribution package names before installing them.</p>
+<div class="docs-code setup-code"><span>$</span> git --version<br><span>$</span> rustc --version<br><span>$</span> cargo --version</div>
+<p>Clone the published source and build a release binary. The first build may download locked dependencies.</p>
+<pre class="setup-terminal"><code>git clone --branch v0.4.0-f4 --depth 1 https://github.com/galgo2077/VRG.git
+cd VRG
+cargo build --release --locked
+test -x target/release/vrg
+./target/release/vrg --help</code></pre>
+<p class="docs-small">This compiles from source. It is not a prebuilt download or a crates.io installation. When all dependencies are already cached, use <code>cargo build --release --locked --offline</code>.</p>
+<div class="setup-alt"><strong>Optional Cargo Git install (clean-machine verification pending)</strong><pre class="setup-terminal"><code>cargo install --git https://github.com/galgo2077/VRG.git --tag v0.4.0-f4 --locked
+vrg --help</code></pre><p>This still compiles the source on your machine. If it fails, use the clone-and-build path above.</p></div>
+</section>
+<section class="docs-section" id="demo"><p class="kicker">02 / SAFE FIRST RUN</p><h2>Test without your vault.</h2><p>Create an isolated sample root with one Markdown note. This command writes only to dedicated demo paths. If the demo config exists, inspect it before retrying.</p>
+<pre class="setup-terminal"><code>mkdir -p "$HOME/vrg-demo-notes" "$HOME/.config/vrg"
+printf '# Demo\n\nThe blue zafiro compass is a synthetic test.\n' &gt; "$HOME/vrg-demo-notes/demo.md"
+DEMO_CFG="$HOME/.config/vrg/demo.toml"
+if test -e "$DEMO_CFG"; then
+  echo "Inspect existing demo.toml before continuing" &gt;&amp;2
+else
+  cat &gt; "$DEMO_CFG" &lt;&lt;EOF
+data_dir = "$HOME/.local/share/vrg-demo-derived"
+capture_session_events = false
+
+[[roots]]
+id = "demo"
+path = "$HOME/vrg-demo-notes"
+allowed_files = ["demo.md"]
+EOF
+fi
+./target/release/vrg --config "$DEMO_CFG" status
+./target/release/vrg --config "$DEMO_CFG" index
+./target/release/vrg --config "$DEMO_CFG" search "zafiro compass" --root demo --text-only</code></pre>
+<p>Expect an attributed hit from <code>demo.md</code>, without modifying the source. The semantic model is optional: text-only search works without downloading model files. Use only synthetic files for rollback or destructive recovery tests.</p></section>
+<section class="docs-section" id="codex"><p class="kicker">03 / READ-ONLY MCP</p><h2>Connect to Codex.</h2><p>Make an isolated project-level <code>.codex/config.toml</code> and use your own absolute paths. Do not paste this placeholder config unchanged.</p>
+<pre class="setup-terminal"><code>[mcp_servers.vrg]
+command = "/absolute/path/to/VRG/target/release/vrg"
+args = ["--config", "/absolute/path/to/demo.toml", "mcp", "serve"]
+cwd = "/absolute/path/to/VRG"
+enabled = true
+required = true
+enabled_tools = [
+  "vrg_status", "vrg_search",
+  "vrg_read_source", "vrg_graph_neighbors"
+]</code></pre>
+<p>Launch a new Codex session; use <code>/mcp</code>, verify the four read-only tools and test <code>vrg_status</code> first. Only search or read content that you explicitly authorized. A remote Codex model may receive snippets from a local MCP server.</p></section>
+<section class="docs-section" id="hooks"><p class="kicker">04 / OPTIONAL AUTOMATION</p><h2>Hooks and compact memory.</h2><p>Source examples: <code>examples/codex/hooks.json.example</code> and <code>scripts/vrg_hook_observer.py</code>. The portable hook observer is Unix-focused and not covered by the original local G04 certification.</p>
+<div class="docs-steps"><div><span>01</span><div><strong>Review scripts</strong><p>Use your canonical executable path and a private evidence directory. The observer expects VRG_HOOK_EXECUTABLE and VRG_HOOK_EVIDENCE_DIR.</p></div></div><div><span>02</span><div><strong>Trust intentionally</strong><p>In Codex, inspect SessionStart, UserPromptSubmit and Stop via <code>/hooks</code>. Approval is separate from MCP connection.</p></div></div><div><span>03</span><div><strong>Verify real events</strong><p>Open a new session, check events and exit codes, and retain only compact metadata—not raw prompts or conversations.</p></div></div></div>
+<p>VRG's MCP remains read-only. Codex can update only approved documentation through ordinary file tools, then VRG indexes the revisions.</p></section>
+<section class="docs-section" id="verify"><p class="kicker">05 / VERIFICATION</p><h2>Check more than the build.</h2><div class="setup-checks"><div><b>01</b><span>Binary and <code>--help</code> work</span></div><div><b>02</b><span><code>status</code> points only at demo roots</span></div><div><b>03</b><span>Text search returns the correct note + revision</span></div><div><b>04</b><span>Source Markdown remains unchanged</span></div><div><b>05</b><span>MCP's four tools work in a real Codex session</span></div><div><b>06</b><span>Hooks produce valid events only after trust</span></div><div><b>07</b><span>Incremental changes produce fresh revisions</span></div><div><b>08</b><span>Private/excluded notes never appear</span></div><div><b>09</b><span>Independent session recovers synthetic memory</span></div><div><b>10</b><span>Backups/recovery tested on isolated data</span></div></div>
+<p>For exact maintainer F4 test identifiers, offline constraints, optional semantic model files and recovery steps, use the <a class="setup-link" href="./public/SETUP.md">complete written guide ↗</a> and <a class="setup-link" href="./PUBLIC_INSTALL.md">operator guide ↗</a>. Do not rerun F4 against personal vaults.</p></section>
+<section class="docs-section" id="trouble"><p class="kicker">06 / TROUBLESHOOTING</p><h2>Common issues.</h2><details><summary><code>cargo --offline</code> fails</summary><p>Dependencies are missing from the local Cargo cache. Perform a reviewed online build using the locked dependencies first.</p></details><details><summary>VRG is absent from Codex <code>/mcp</code></summary><p>Verify the server command, effective project config, executable, startup output and allowlist. Existing sessions may retain an older process.</p></details><details><summary>Hook shows modified or untrusted</summary><p>Review and trust the current handler in <code>/hooks</code>; do not bypass or edit the trust store.</p></details><details><summary>Model or semantic retrieval unavailable</summary><p>Use text-only search, or provision and verify the optional multilingual-e5-small model and tokenizer artifacts separately.</p></details></section>
+<section class="docs-section" id="release"><p class="kicker">07 / DISTRIBUTION</p><h2>What is published?</h2><div class="docs-cards"><div><b>Source</b><span>Published: v0.4.0-f4</span></div><div><b>Binary assets</b><span>No compiled downloads attached</span></div><div><b>crates.io</b><span>No verified project package</span></div></div><p><strong>Versioning:</strong> <code>Cargo.toml</code> declares <code>0.1.0</code>; the release tag <code>v0.4.0-f4</code> identifies the Phase 4 milestone, not an equivalent crates.io package version.</p><a class="button button-primary" href="https://github.com/galgo2077/VRG/releases/tag/v0.4.0-f4" rel="noopener noreferrer">View source release ↗</a></section>
+</div></div></main><footer class="footer"><div class="shell footer-bottom"><span>VRG · Source build guide · No analytics or tracking</span><a href="./index.html">Back to homepage ↗</a></div></footer></body></html>

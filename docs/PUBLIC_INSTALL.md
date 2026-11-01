@@ -1,5 +1,17 @@
 # Installation and operation
 
+**Published F4 source channel:** [GitHub v0.4.0-f4](https://github.com/galgo2077/VRG/releases/tag/v0.4.0-f4) contains source and Cargo.lock, but no compiled binaries. We could not verify a crates.io release for this project's identity. The Cargo package version is 0.1.0; the tag denotes the F4 milestone. For a safe copy-and-paste demo and all checks, use [the complete setup guide](public/SETUP.md) or [the Spanish guide](public/SETUP.es.md).
+
+Quick source build (dependencies may need a first-time download):
+
+```sh
+git clone --branch v0.4.0-f4 --depth 1 https://github.com/galgo2077/VRG.git
+cd VRG
+cargo build --release --locked
+./target/release/vrg --help
+```
+
+
 These instructions describe a local deployment. Void Linux is the validated environment; other operating systems are not certified. VRG's recorded Phase 4 and integration results apply to the original tested configuration and do not certify a new installation. The portable observer is a separate distribution adaptation and is not itself covered by the recorded G04 validation.
 
 ## Operating-system support

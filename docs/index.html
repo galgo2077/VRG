@@ -17,6 +17,7 @@
       <a class="brand" href="./index.html" aria-label="VRG home"><span class="brand-mark">V<span>●</span></span><span>VRG<span class="brand-dot">.</span></span></a>
       <nav class="nav-links" aria-label="Main navigation">
         <a href="#why">Why VRG</a>
+        <a href="./setup.html">Setup</a>
         <a href="#architecture">Architecture</a>
         <a href="#principles">Privacy</a>
         <a href="./guide.html#start">Docs</a>
@@ -35,10 +36,10 @@
         <h1>Knowledge,<br><em>connected.</em></h1>
         <p class="lead">Give your assistant the context that matters. VRG is a Rust-based approach to searching Markdown, tracing relationships and recovering project knowledge—without turning your vault into a chat transcript.</p>
         <div class="hero-actions">
-          <a class="button button-primary" href="#architecture">Explore the architecture <span aria-hidden="true">↗</span></a>
+          <a class="button button-primary" href="./setup.html">Install from source <span aria-hidden="true">↗</span></a>
           <a class="button button-secondary" href="https://github.com/galgo2077/VRG" rel="noopener noreferrer">View source <span aria-hidden="true">↗</span></a>
         </div>
-        <p class="release-note"><span class="note-star" aria-hidden="true">✳</span> Source is available for local builds. Installation and platform support remain subject to the documented limits.</p>
+        <p class="release-note"><span class="note-star" aria-hidden="true">✳</span> Phase 4 source release is available. Build locally; no binary downloads or verified crates.io package yet.</p>
       </div>
       <div class="hero-visual" aria-label="Conceptual flow: Markdown vault to retrieval, graph and Codex">
         <div class="visual-stars" aria-hidden="true"></div>
@@ -58,6 +59,17 @@
     <section class="stats-strip" aria-label="Project priorities">
       <div class="shell strip-inner"><span>RUST CORE</span><span class="strip-separator">✳</span><span>MARKDOWN FIRST</span><span class="strip-separator">✳</span><span>DERIVED GRAPH</span><span class="strip-separator">✳</span><span>PERMISSIONED MCP</span></div>
     </section>
+
+
+    <section id="setup" class="quickstart-section"><div class="shell quickstart-layout">
+      <div><p class="kicker">00 / INSTALL & TEST</p><h2>From source.<br><span>Into context.</span></h2><p>Download the published Phase 4 source, compile VRG, then verify with a synthetic Markdown root—before granting access to your actual notes.</p>
+      <div class="quickstart-meta"><span>F4 SOURCE AVAILABLE</span><span>NO PREBUILT BINARIES</span><span>RUST 1.89+</span></div><a class="button button-primary" href="./setup.html">Full setup guide ↗</a></div>
+      <div class="quickstart-terminal"><div class="terminal-dots"><i></i><i></i><i></i></div><div class="quickstart-terminal-label">SOURCE BUILD / LINUX</div><pre><code><span>git clone --branch v0.4.0-f4 --depth 1 \
+  https://github.com/galgo2077/VRG.git</span>
+<span>cd VRG</span>
+<span>cargo build --release --locked</span>
+<span>./target/release/vrg --help</span></code></pre><p>Builds locally · dependency download may be required · <a href="./setup.html#demo">safe testing steps ↗</a></p></div>
+    </div></section>
 
     <section id="why" class="section shell">
       <div class="section-head"><p class="kicker">01 / THE IDEA</p><h2>Less rediscovery.<br><span>More continuity.</span></h2><p>Finding prior decisions should be easier than rereading a repository or carrying an entire chat history into every new session.</p></div>
@@ -89,6 +101,6 @@
     <section class="cta-section"><div class="shell cta-inner"><div><p class="kicker">04 / WHAT'S NEXT</p><h2>A better memory<br>for real work.</h2><p>Explore the public roadmap and the original specification while the source freeze is prepared for publication.</p></div><div class="cta-buttons"><a class="button button-light" href="./guide.html#roadmap">See the roadmap <span aria-hidden="true">↗</span></a><a class="button button-outline" href="./guide.html#start">Getting started <span aria-hidden="true">↗</span></a></div></div></section>
   </main>
 
-  <footer class="footer"><div class="shell footer-top"><a class="brand" href="./index.html"><span class="brand-mark">V<span>●</span></span><span>VRG<span class="brand-dot">.</span></span></a><p>Vault RAG Graph<br>Knowledge without the noise.</p><div class="footer-links"><a href="./guide.html#overview">Overview</a><a href="./guide.html#security">Security</a><a href="./guide.html#roadmap">Roadmap</a><a href="https://github.com/galgo2077/VRG" rel="noopener noreferrer">GitHub ↗</a></div></div><div class="shell footer-bottom"><span>© VRG · Static site · No tracking</span><span>Made for Markdown, designed for continuity.</span></div></footer>
+  <footer class="footer"><div class="shell footer-top"><a class="brand" href="./index.html"><span class="brand-mark">V<span>●</span></span><span>VRG<span class="brand-dot">.</span></span></a><p>Vault RAG Graph<br>Knowledge without the noise.</p><div class="footer-links"><a href="./setup.html">Setup</a><a href="./guide.html#security">Security</a><a href="./guide.html#roadmap">Roadmap</a><a href="https://github.com/galgo2077/VRG" rel="noopener noreferrer">GitHub ↗</a></div></div><div class="shell footer-bottom"><span>© VRG · Static site · No tracking</span><span>Made for Markdown, designed for continuity.</span></div></footer>
 </body>
 </html>
