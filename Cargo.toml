@@ -12,7 +12,7 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/galgo2077/VRG"
 homepage = "https://galgo2077.github.io/VRG/"
 readme = "README.md"
-include = ["src/**", "tests/**", "scripts/**", "examples/**", "docs/**", "README.md", "CHANGELOG.md", "specs/setup-doctor/**", "LICENSE-*", "Cargo.toml", "Cargo.lock"]
+include = ["src/**", "tests/**", "scripts/*.py", "examples/**", "docs/**", "README.md", "CHANGELOG.md", "specs/setup-doctor/**", "LICENSE-*", "Cargo.toml", "Cargo.lock"]
 
 [lib]
 path = "src/lib.rs"
