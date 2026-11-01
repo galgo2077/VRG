@@ -14,6 +14,9 @@ cargo build --release --locked
 
 These instructions describe a local deployment. Void Linux is the validated environment; other operating systems are not certified. VRG's recorded Phase 4 and integration results apply to the original tested configuration and do not certify a new installation. The portable observer is a separate distribution adaptation and is not itself covered by the recorded G04 validation.
 
+
+> **Current published package:** 0.1.1 requires the manual setup shown below. Automated `setup` and `doctor` commands are not available in that release.
+
 ## Operating-system support
 
 - **Linux:** the steps below describe a source build. Void Linux was used for the recorded local validation; other distributions have not been certified.
@@ -110,3 +113,11 @@ Selective documentation is a decision by the assistant: record only new, verifie
 - **Hooks not running:** inspect `/hooks`, compare each event and command with the reviewed definition, confirm trust, and inspect bounded event metadata. Do not bypass trust or assume that a displayed entry executed.
 - **Stale or failed synchronization:** inspect `vrg status`, source permissions and exclusions, and the configured data directory. Do not label a stale generation as current or change roots to work around an error.
 - **Recovery:** derived data is rebuildable, but any rollback or restoration must be scoped to the authorized installation and its documented recovery policy. Never overwrite or clean original vaults or backups as a troubleshooting shortcut.
+
+## Setup and doctor development status
+
+The candidate adds `vrg setup` and `vrg doctor`; neither is available in the published 0.1.1 crate or F4 binary. Until a newer release is verified, use the manual instructions above.
+
+The planned project-scoped flow requires explicit source roots and separates text-only search from a local model; no model download is available yet. Hook trust remains a separate user decision in Codex. MCP stays read-only and can return excerpts to a remote model when the user has authorized that transfer. A doctor configuration check does not establish a live Codex connection or hook execution.
+
+Candidate commands and recovery constraints are documented in the [English guide](public/SETUP.md#candidate-workflow-development-builds-only) and [Spanish guide](public/SETUP.es.md#flujo-candidato-solo-compilaciones-de-desarrollo); they remain subject to validation.

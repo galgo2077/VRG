@@ -1,7 +1,7 @@
 use std::{
     collections::BTreeMap,
     env, fs,
-    io::Write,
+    io::{self, IsTerminal, Write},
     path::{Path, PathBuf},
 };
 
@@ -31,6 +31,10 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Plan or configure an explicitly authorized VRG profile.
+    Setup(SetupArgs),
+    /// Inspect configuration without opening or changing derived storage.
+    Doctor(DoctorArgs),
     /// Create an empty-root configuration without overwriting an existing file.
     Init {
         /// Destination configuration file (default: XDG config path).
@@ -78,6 +82,71 @@ enum Command {
         #[command(subcommand)]
         command: McpCommand,
     },
+}
+
+#[derive(Debug, Args)]
+struct SetupArgs {
+    /// Recover an interrupted VRG-owned transaction from its private backup.
+    #[arg(long)]
+    recover: Option<PathBuf>,
+    /// Existing project directory to configure.
+    #[arg(long)]
+    project: Option<PathBuf>,
+    /// Explicitly authorized Markdown source directory (repeatable).
+    #[arg(long = "root")]
+    roots: Vec<PathBuf>,
+    /// Dedicated derived data directory.
+    #[arg(long)]
+    data_dir: Option<PathBuf>,
+    /// Existing compatible local model directory.
+    #[arg(long, conflicts_with = "text_only")]
+    model_dir: Option<PathBuf>,
+    /// Download the pinned compatible model to this dedicated path (explicit consent).
+    #[arg(long, conflicts_with_all = ["model_dir", "text_only"])]
+    download_model: Option<PathBuf>,
+    /// Select text-only retrieval explicitly.
+    #[arg(long, conflicts_with_all = ["model_dir", "download_model"])]
+    text_only: bool,
+    /// Configure Codex for the selected project.
+    #[arg(long, conflicts_with = "cli_only")]
+    codex: bool,
+    /// Authorize the configured Codex model to receive retrieved fragments from selected roots.
+    #[arg(long, requires = "codex")]
+    allow_remote_context: bool,
+    /// Configure only the VRG command line.
+    #[arg(long, conflicts_with = "codex")]
+    cli_only: bool,
+    /// Explicitly authorize operational memory under this project directory.
+    #[arg(long)]
+    memory_dir: Option<PathBuf>,
+    /// Print the proposed changes without creating files or downloading.
+    #[arg(long)]
+    dry_run: bool,
+    /// Do not ask interactive questions; require explicit choices.
+    #[arg(long)]
+    non_interactive: bool,
+    /// Confirm the displayed bounded plan; does not authorize hook trust.
+    #[arg(long)]
+    yes: bool,
+    /// Prohibit network access.
+    #[arg(long)]
+    offline: bool,
+}
+
+#[derive(Debug, Args)]
+struct DoctorArgs {
+    /// Output a machine-readable report.
+    #[arg(long)]
+    json: bool,
+    /// Run explicitly requested isolated runtime checks.
+    #[arg(long)]
+    check_runtime: bool,
+    /// Repair recognized VRG-owned problems only.
+    #[arg(long)]
+    fix: bool,
+    /// Show the repair plan without applying it.
+    #[arg(long, requires = "fix")]
+    dry_run: bool,
 }
 
 #[derive(Debug, Args)]
@@ -135,6 +204,8 @@ enum MemoryCommand {
 pub async fn run() -> VrgResult<()> {
     let cli = Cli::parse();
     match cli.command {
+        Command::Setup(args) => run_setup(cli.config, args),
+        Command::Doctor(args) => run_doctor(cli.config, args),
         Command::Init { output } => {
             let destination = match output.or(cli.config) {
                 Some(path) => path,
@@ -372,5 +443,385 @@ fn print_json(value: &impl Serialize) -> VrgResult<()> {
     let json = serde_json::to_string_pretty(value)
         .map_err(|error| VrgError::InvalidConfig(error.to_string()))?;
     println!("{json}");
+    Ok(())
+}
+
+fn ask(prompt: &str) -> VrgResult<String> {
+    eprint!("{prompt}");
+    io::stderr().flush()?;
+    let mut answer = String::new();
+    if io::stdin().read_line(&mut answer)? == 0 {
+        return Err(VrgError::InvalidConfig(
+            "input ended; supply explicit setup options".into(),
+        ));
+    }
+    Ok(answer.trim().to_owned())
+}
+
+fn absolute(path: PathBuf) -> VrgResult<PathBuf> {
+    if path.is_absolute() {
+        Ok(path)
+    } else {
+        Ok(env::current_dir()?.join(path))
+    }
+}
+
+fn find_program(name: &str) -> Option<PathBuf> {
+    env::var_os("PATH")
+        .and_then(|paths| {
+            env::split_paths(&paths)
+                .map(|p| p.join(name))
+                .find(|p| p.is_file())
+        })
+        .and_then(|p| p.canonicalize().ok())
+}
+
+fn run_setup(explicit_config: Option<PathBuf>, mut args: SetupArgs) -> VrgResult<()> {
+    let interactive = !args.non_interactive && io::stdin().is_terminal();
+    if let Some(backup) = args.recover.take() {
+        let backup = absolute(backup)?;
+        println!(
+            "Recovery plan: inspect {} and revert only unchanged VRG-owned revisions",
+            backup.display()
+        );
+        if args.dry_run {
+            return Ok(());
+        }
+        if !args.yes
+            && (!interactive || !ask("Recover this transaction? [y/N] ")?.eq_ignore_ascii_case("y"))
+        {
+            return Err(VrgError::InvalidConfig("recovery was not confirmed".into()));
+        }
+        let count = crate::setup::recover_transaction(&backup)?;
+        println!("Recovered {count} file(s); later user changes are never overwritten.");
+        return Ok(());
+    }
+    if args.project.is_none() {
+        if !interactive {
+            return Err(VrgError::InvalidConfig(
+                "supply --project in non-interactive mode".into(),
+            ));
+        }
+        let cwd = env::current_dir()?;
+        let prompt = if cwd.join(".git").exists() {
+            format!("Project directory [{}]: ", cwd.display())
+        } else {
+            "Project directory: ".into()
+        };
+        let answer = ask(&prompt)?;
+        if answer.is_empty() && cwd.join(".git").exists() {
+            args.project = Some(cwd);
+        } else if !answer.is_empty() {
+            args.project = Some(answer.into());
+        } else {
+            return Err(VrgError::InvalidConfig(
+                "project directory is required".into(),
+            ));
+        }
+    }
+    if args.roots.is_empty() {
+        if !interactive {
+            return Err(VrgError::InvalidConfig(
+                "supply at least one authorized --root".into(),
+            ));
+        }
+        let answer = ask("Markdown source directory to authorize (no home-wide discovery): ")?;
+        if answer.is_empty() {
+            return Err(VrgError::InvalidConfig(
+                "an authorized source directory is required".into(),
+            ));
+        }
+        args.roots.push(answer.into());
+    }
+    if args.model_dir.is_none() && args.download_model.is_none() && !args.text_only {
+        if !interactive {
+            return Err(VrgError::InvalidConfig(
+                "select --text-only, --model-dir or --download-model".into(),
+            ));
+        }
+        let answer = ask("Retrieval: [t]ext, [d]ownload pinned model, or local model directory: ")?;
+        if answer.eq_ignore_ascii_case("t") {
+            args.text_only = true;
+        } else if answer.eq_ignore_ascii_case("d") {
+            args.download_model = Some(
+                VrgConfig::default()
+                    .data_dir
+                    .parent()
+                    .ok_or_else(|| VrgError::InvalidConfig("data directory has no parent".into()))?
+                    .join("vrg-models/multilingual-e5-small"),
+            );
+        } else if !answer.is_empty() {
+            args.model_dir = Some(answer.into());
+        } else {
+            return Err(VrgError::InvalidConfig(
+                "retrieval choice is required".into(),
+            ));
+        }
+    }
+    if !args.codex && !args.cli_only {
+        if !interactive {
+            return Err(VrgError::InvalidConfig(
+                "select --codex or --cli-only".into(),
+            ));
+        }
+        let answer = ask("Configure Codex for this project? [y/N] ")?;
+        if answer.eq_ignore_ascii_case("y") {
+            args.codex = true;
+        } else {
+            args.cli_only = true;
+        }
+    }
+    if args.codex && !args.allow_remote_context {
+        if !interactive || !ask("Allow the configured Codex model to receive retrieved fragments from these authorized roots? [y/N] ")?.eq_ignore_ascii_case("y") {
+            return Err(VrgError::InvalidConfig("Codex integration requires explicit --allow-remote-context; use --cli-only otherwise".into()));
+        }
+        args.allow_remote_context = true;
+    }
+    if args.codex && args.memory_dir.is_none() && interactive {
+        let answer = ask(
+            "Authorize compact operational memory under this project? Enter directory or leave empty for none: ",
+        )?;
+        if !answer.is_empty() {
+            args.memory_dir = Some(answer.into());
+        }
+    }
+    if args.non_interactive && !args.yes && !args.dry_run {
+        return Err(VrgError::InvalidConfig(
+            "non-interactive application requires --yes".into(),
+        ));
+    }
+    let project = absolute(args.project.expect("project checked"))?.canonicalize()?;
+    let roots = args
+        .roots
+        .into_iter()
+        .map(absolute)
+        .collect::<VrgResult<Vec<_>>>()?;
+    let config_path = absolute(
+        match explicit_config.or_else(|| env::var_os("VRG_CONFIG").map(PathBuf::from)) {
+            Some(path) => path,
+            None => default_config_path()?,
+        },
+    )?;
+    let data_dir = match args.data_dir {
+        Some(path) => absolute(path)?,
+        None => VrgConfig::default().data_dir,
+    };
+    let memory_dir = args.memory_dir.map(absolute).transpose()?;
+    let download = args.download_model.map(absolute).transpose()?;
+    let model_dir = match args.model_dir.map(absolute).transpose()? {
+        Some(path) => {
+            if !path.is_dir() {
+                return Err(VrgError::InvalidConfig(
+                    "local model directory does not exist".into(),
+                ));
+            }
+            Some(path)
+        }
+        None => download.clone(),
+    };
+    if args.offline && download.as_ref().is_some_and(|path| !path.exists()) {
+        return Err(VrgError::InvalidConfig(
+            "--offline prohibits model download".into(),
+        ));
+    }
+    println!(
+        "Environment: {} / {}; executable: {}",
+        env::consts::OS,
+        env::consts::ARCH,
+        env::current_exe()?.display()
+    );
+    if args.codex {
+        match find_program("codex").and_then(|program| {
+            std::process::Command::new(program)
+                .arg("--version")
+                .output()
+                .ok()
+        }) {
+            Some(result) if result.status.success() => {
+                println!("Codex: {}", String::from_utf8_lossy(&result.stdout).trim())
+            }
+            _ => eprintln!(
+                "Codex executable not detected; project configuration will require Codex installation before use."
+            ),
+        }
+    }
+    let extra = if args.codex {
+        let python = match find_program("python3") {
+            Some(path) => path,
+            None if memory_dir.is_none() => PathBuf::from("/usr/bin/python3"),
+            None => {
+                return Err(VrgError::InvalidConfig(
+                    "Codex hooks require python3 on PATH".into(),
+                ));
+            }
+        };
+        let exe = env::current_exe()?.canonicalize()?;
+        crate::setup_codex::plan_codex(
+            &project,
+            &exe,
+            &config_path,
+            &data_dir,
+            &python,
+            memory_dir.as_deref(),
+        )
+        .map_err(VrgError::InvalidConfig)?
+    } else {
+        Vec::new()
+    };
+    // Present the exact proposed VRG handlers when a first review is needed.
+    let hook_path = project.join(".codex/hooks.json");
+    let hook_bytes = extra
+        .iter()
+        .find(|file| file.path == hook_path)
+        .map(|file| file.content.clone())
+        .or_else(|| fs::read(&hook_path).ok());
+    let mut hook_review = Vec::new();
+    if args.codex && memory_dir.is_some() {
+        if let Some(value) = hook_bytes
+            .as_deref()
+            .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(bytes).ok())
+        {
+            for event in ["SessionStart", "UserPromptSubmit", "Stop"] {
+                if let Some(groups) = value["hooks"][event].as_array() {
+                    for group in groups {
+                        if let Some(handlers) = group["hooks"].as_array() {
+                            for handler in handlers {
+                                if let Some(command) = handler["command"]
+                                    .as_str()
+                                    .filter(|command| command.contains("vrg-hook-observer-v1.py"))
+                                {
+                                    hook_review.push((event, command.to_owned()));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let options = crate::setup::SetupOptions {
+        project,
+        roots,
+        config_path,
+        data_dir: data_dir.clone(),
+        model_dir,
+        memory_dir,
+    };
+    let plan = crate::setup::plan_setup(&options, extra)?;
+    println!(
+        "VRG setup plan: {} file(s); no indexing; offline={}",
+        plan.changes().len(),
+        args.offline
+    );
+    if let Some(path) = &download {
+        if path.exists() {
+            println!(
+                "Verify and reuse pinned model at {} ({})",
+                path.display(),
+                crate::model_setup::MODEL_REVISION
+            );
+        } else {
+            println!(
+                "Pinned model download: {} ({}; approximately 488 MB); requires curl and free disk space",
+                path.display(),
+                crate::model_setup::MODEL_REVISION
+            );
+        }
+    } else {
+        println!("No downloads planned.");
+    }
+    for path in plan.changes() {
+        println!("  {}", path.display());
+    }
+    println!(
+        "Authorized source roots are local. MCP results may be shared with the configured Codex model when used; setup does not authorize transfer of unrelated material."
+    );
+    if args.codex {
+        println!("If Codex requests review, open /hooks; setup never grants trust.");
+        if !hook_review.is_empty() {
+            println!("Project hook source: {}", hook_path.display());
+            for (event, command) in &hook_review {
+                println!("  {event}: {command}");
+            }
+        }
+    }
+    if args.dry_run {
+        return Ok(());
+    }
+    if !args.yes {
+        if !interactive || !ask("Apply this plan? [y/N] ")?.eq_ignore_ascii_case("y") {
+            return Err(VrgError::InvalidConfig("plan was not confirmed".into()));
+        }
+    }
+    if let Some(path) = &download {
+        let parent = path
+            .parent()
+            .ok_or_else(|| VrgError::InvalidConfig("model has no parent".into()))?;
+        crate::setup::private_dirs(parent)?;
+        crate::model_setup::download_model(path, true, args.offline)?;
+    }
+    if let Some(path) = &options.model_dir {
+        let model = crate::config::SemanticModelConfig {
+            model_id: "intfloat/multilingual-e5-small".into(),
+            model_dir: path.clone(),
+            threads: 4,
+            max_length: 512,
+        };
+        crate::semantic::LocalEmbedder::load(&model)?;
+    }
+    let result = plan.apply(
+        &data_dir.join("setup-backups"),
+        &options.project,
+        &options.config_path,
+    )?;
+    println!(
+        "Applied {} changes; private backup: {}",
+        result.changed,
+        result
+            .backup
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "not needed".into())
+    );
+    Ok(())
+}
+
+fn run_doctor(config: Option<PathBuf>, args: DoctorArgs) -> VrgResult<()> {
+    if args.dry_run && args.check_runtime {
+        return Err(VrgError::InvalidConfig(
+            "--fix --dry-run cannot run the active runtime probe; omit --check-runtime".into(),
+        ));
+    }
+    if args.fix {
+        let project = env::current_dir()?.canonicalize()?;
+        let plan = crate::doctor::repair_plan(&project, config.as_deref())?;
+        eprintln!("Recognized repair plan: {} file(s)", plan.changes().len());
+        for path in plan.changes() {
+            eprintln!("  {}", path.display());
+        }
+        if !args.dry_run && !plan.changes().is_empty() {
+            let path = crate::doctor::resolve_config_path(config.as_deref())
+                .ok_or_else(|| VrgError::InvalidConfig("configuration path unavailable".into()))?;
+            let data_dir = VrgConfig::load(&path)?.data_dir;
+            let applied = plan.apply(&data_dir.join("setup-backups"), &project, &path)?;
+            eprintln!(
+                "Repaired {} file(s); backup: {}",
+                applied.changed,
+                applied
+                    .backup
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "not needed".into())
+            );
+        }
+    }
+    let report = crate::doctor::inspect(config.as_deref(), args.check_runtime);
+    if args.json {
+        print_json(&report)?;
+    } else {
+        report.print_human();
+    }
+    let code = report.exit_code();
+    if code != 0 {
+        std::process::exit(code);
+    }
     Ok(())
 }

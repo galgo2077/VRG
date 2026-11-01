@@ -2,6 +2,8 @@
 
 > **Release channel (1 November 2026).** [`v0.4.0-f4`](https://github.com/galgo2077/VRG/releases/tag/v0.4.0-f4) is a **source release**, with Rust application code, tests and `Cargo.lock`, plus a verified **Linux x86_64 binary archive** tested on Void Linux (glibc 2.41). The official [vrg 0.1.1 crate](https://crates.io/crates/vrg/0.1.1) is published under the project owner; version 0.1.1 was installed and smoke-tested on Void Linux x86_64. The tag is a **Phase 4 release label**; the F4 tagged source reports Cargo version `0.1.0`. macOS and Windows aren't certified, and the portable Unix hook observer is not the same implementation as the original local G04 verification.
 
+> **Published package 0.1.1:** configuration is manual; automated `setup` and `doctor` commands are not included in this release.
+
 [Website setup](../setup.html) · [Español](SETUP.es.md) · [Existing operator guide](../PUBLIC_INSTALL.md) · [Source code](https://github.com/galgo2077/VRG)
 
 ## 1. Prerequisites
@@ -194,3 +196,23 @@ F4-03 requires a verified local model and environment variable `VRG_F4_MODEL_DIR
 - **Certified OS:** local cases on Void Linux. Do not claim native Windows or macOS support until independently verified.
 
 See [Installation and operation](../PUBLIC_INSTALL.md) for additional owner/operator details and recovery.
+
+## Upcoming setup and doctor
+
+`vrg setup` and `vrg doctor` are under development and are **not in the published 0.1.1 crate or the F4 binary**. Continue using the manual steps in this guide until a newer release is verified. The candidate is designed to require explicit roots, distinguish text mode from a local model, and leave hook trust to the user. Model download, real Codex event execution and the full setup/recovery workflow have not yet been certified. MCP remains read-only.
+
+### Candidate workflow (development builds only)
+
+These commands describe the **unpublished, unvalidated candidate**, not the 0.1.1 crate or F4 binary. Build and test it in an isolated environment before relying on it. Run `vrg setup` in a terminal for guided choices; review its plan before applying. For a non-interactive text-only setup, substitute existing absolute project and Markdown-root paths and a dedicated memory path inside the project:
+
+```sh
+vrg setup --project /path/to/project --root /path/to/approved-notes \
+  --text-only --codex --allow-remote-context \
+  --memory-dir /path/to/project/vrg-memory --non-interactive --yes --offline
+vrg doctor
+vrg doctor --json
+```
+
+`--allow-remote-context` explicitly authorizes the configured Codex model to receive retrieved fragments from the selected roots; omit Codex and choose `--cli-only` if that transfer is not authorized. `--yes` confirms the displayed technical plan, not hook trust or additional roots. `--root` is repeatable, and `--data-dir` selects dedicated derived storage outside roots. Preview with `--dry-run`, which must not apply changes or download. A compatible local model may be selected with `--model-dir`; alternatively `--download-model /path/to/model` expresses download consent. The latter is incompatible with a network download in `--offline` mode. Download verification and model loading remain subject to final validation.
+
+When setup creates project hooks, review their actual commands in Codex `/hooks` and approve them yourself if appropriate. Approval and a configuration file alone do not establish execution. The candidate `vrg doctor --check-runtime` runs a direct isolated MCP client, not a Codex session. `vrg doctor --fix --dry-run` previews recognized repairs; `vrg doctor --fix` applies only supported VRG-owned repairs. If setup reports an interrupted transaction, `vrg setup --recover /path/to/private/transaction --dry-run` previews recovery; rerun without `--dry-run` to confirm it interactively, or add `--yes` for a non-interactive confirmation. Recovery must not overwrite later user changes. Inspect reported conflicts rather than deleting source notes or databases.

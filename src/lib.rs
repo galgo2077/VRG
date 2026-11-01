@@ -1,11 +1,15 @@
 pub mod auto_sync;
 pub mod cli;
+pub mod doctor;
+pub mod setup;
+pub mod setup_codex;
 pub mod config;
 pub mod contracts;
 pub mod error;
 pub mod graph;
 pub mod indexer;
 pub mod mcp_server;
+pub mod model_setup;
 pub mod retrieval;
 pub mod semantic;
 pub mod storage;

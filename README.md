@@ -10,6 +10,8 @@ The Phase 4 baseline and local integration were validated on **Void Linux**. The
 
 The semantic model is optional. If no usable model is configured, text search remains available and semantic retrieval is reported as unavailable or degraded. VRG does not implicitly download models. Source-note writing through MCP is disabled.
 
+> **Current published package:** `vrg` 0.1.1 uses the manual configuration documented below. The setup and doctor commands in development are not part of that release.
+
 ## Install from the F4 source release
 
 The bilingual installation site is available at <https://galgo2077.github.io/VRG/>.
@@ -38,6 +40,10 @@ The official crates.io package can also be installed from source. Version `0.1.1
 cargo install vrg --locked
 vrg --version
 ```
+
+## Setup and doctor under development
+
+The next release is being developed with `vrg setup` and `vrg doctor`; these commands are **not available in the published 0.1.1 crate or the F4 binary**. Their behavior and release remain subject to validation. The current installation instructions above still apply. Candidate syntax, authorization boundaries and recovery are described in the [English guide](docs/public/SETUP.md#candidate-workflow-development-builds-only) and [guía en español](docs/public/SETUP.es.md#flujo-candidato-solo-compilaciones-de-desarrollo).
 
 ## Privacy and operational boundaries
 
