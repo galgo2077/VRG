@@ -1,0 +1,8 @@
+{
+  "description": "VRG local lifecycle integration; replace the placeholder path before use",
+  "hooks": {
+    "SessionStart": [{"hooks": [{"type": "command", "command": "python3 /absolute/path/to/vrg/scripts/vrg_hook_observer.py codex-start", "timeout": 600}]}],
+    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "python3 /absolute/path/to/vrg/scripts/vrg_hook_observer.py codex-turn", "timeout": 600}]}],
+    "Stop": [{"hooks": [{"type": "command", "command": "python3 /absolute/path/to/vrg/scripts/vrg_hook_observer.py codex-stop", "timeout": 600}]}]
+  }
+}
