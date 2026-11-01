@@ -18,9 +18,9 @@ jobs:
         run: |
           set -euo pipefail
           test "$(uname -m)" = x86_64
-          run_id=41324004614
+          run_id=41332002867
           run=$(gh api "repos/${{ github.repository }}/actions/runs/$run_id")
-          test "$(printf '%s' "$run" | jq -r .head_sha)" = ba47f5eaf8360c3cdc0256e718c28da7a8162534
+          test "$(printf '%s' "$run" | jq -r .head_sha)" = 086fe85c2cc2164159258ce5b2f2840ef398e5c4
           test "$(printf '%s' "$run" | jq -r .conclusion)" = success
           artifact=$(gh api "repos/${{ github.repository }}/actions/runs/$run_id/artifacts" --jq '.artifacts[] | select(.name == "onnxruntime-1.24.1-macos-intel-probe" and .expired == false)')
           artifact_id=$(printf '%s' "$artifact" | jq -r .id)

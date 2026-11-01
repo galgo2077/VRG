@@ -59,6 +59,17 @@ jobs:
           "$RUNNER_TEMP/vrg-package/vrg" --help >/dev/null
           cd "$RUNNER_TEMP"
           python3 "$GITHUB_WORKSPACE/scripts/ci_distribution_smoke.py" "$RUNNER_TEMP/vrg-package/vrg"
+      - name: Verify real local semantic retrieval
+        shell: bash
+        run: |
+          set -euo pipefail
+          model="$RUNNER_TEMP/vrg-e5-model"
+          mkdir -m 700 "$model"
+          base=https://huggingface.co/intfloat/multilingual-e5-small/resolve/614241f622f53c4eeff9890bdc4f31cfecc418b3/onnx
+          for file in model.onnx tokenizer.json config.json special_tokens_map.json tokenizer_config.json; do
+            curl --disable --fail --location --silent --show-error --connect-timeout 15 --max-time 900 "$base/$file" -o "$model/$file"
+          done
+          python3 scripts/ci_semantic_smoke.py "$RUNNER_TEMP/vrg-package/vrg" "$model"
       - name: Package candidate and record environment
         shell: bash
         run: |
