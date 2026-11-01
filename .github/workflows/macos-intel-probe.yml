@@ -23,6 +23,8 @@ jobs:
         run: cargo +1.98.0 build --release --locked --offline --target x86_64-apple-darwin
       - name: Verify absent or invalid runtime fails safely
         run: cargo +1.98.0 test --locked --offline --target x86_64-apple-darwin --lib macos_intel_runtime_tests
+      - name: Verify setup preflights runtime before download
+        run: cargo +1.98.0 test --locked --offline --target x86_64-apple-darwin --test doctor_passive intel_setup_checks_runtime_before_model_download_or_writes
       - name: Exercise text-mode distribution outside checkout
         shell: bash
         run: |

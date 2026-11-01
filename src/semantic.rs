@@ -43,6 +43,13 @@ pub(crate) fn macos_intel_runtime_path() -> VrgResult<std::path::PathBuf> {
     Ok(directory.join("libonnxruntime.dylib"))
 }
 
+/// Verify the installed runtime before any optional model download or setup writes.
+/// This only loads the library; it does not download or create files.
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+pub(crate) fn preflight_macos_intel_runtime() -> VrgResult<()> {
+    initialize_macos_intel_runtime(&macos_intel_runtime_path()?)
+}
+
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
 fn initialize_macos_intel_runtime(path: &Path) -> VrgResult<()> {
     let metadata = fs::symlink_metadata(path).map_err(|_| {
@@ -97,7 +104,7 @@ impl LocalEmbedder {
             ));
         }
         #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-        initialize_macos_intel_runtime(&macos_intel_runtime_path()?)?;
+        preflight_macos_intel_runtime()?;
 
         let root_metadata = fs::symlink_metadata(&config.model_dir).map_err(|error| {
             VrgError::SemanticUnavailable(format!(

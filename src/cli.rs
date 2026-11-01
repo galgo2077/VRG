@@ -808,6 +808,10 @@ fn run_setup(explicit_config: Option<PathBuf>, mut args: SetupArgs) -> VrgResult
             return Err(VrgError::InvalidConfig("plan was not confirmed".into()));
         }
     }
+    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    if options.model_dir.is_some() {
+        crate::semantic::preflight_macos_intel_runtime()?;
+    }
     if let Some(path) = &download {
         let parent = path
             .parent()

@@ -253,3 +253,33 @@ fn doctor_rejects_a_source_replaced_by_a_symlink() {
     assert_eq!(report.exit_code(), 1);
     fs::remove_dir_all(root).unwrap();
 }
+
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+#[test]
+fn intel_setup_checks_runtime_before_model_download_or_writes() {
+    let root = fixture();
+    let project = root.join("project");
+    let notes = root.join("notes");
+    fs::create_dir(&project).unwrap();
+    fs::create_dir(&notes).unwrap();
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_vrg"))
+        .env("HOME", &root)
+        .env("XDG_CONFIG_HOME", root.join("config"))
+        .env("XDG_DATA_HOME", root.join("data"))
+        .env_remove("VRG_CONFIG")
+        .env_remove("VRG_DATA_DIR")
+        .args(["setup", "--project"])
+        .arg(&project)
+        .arg("--root")
+        .arg(&notes)
+        .args(["--cli-only", "--download-model"])
+        .arg(root.join("models/e5"))
+        .args(["--non-interactive", "--yes"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(!root.join("models").exists());
+    assert!(!root.join("config").exists());
+    assert!(!root.join("data").exists());
+    fs::remove_dir_all(root).unwrap();
+}
