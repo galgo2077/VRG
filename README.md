@@ -12,6 +12,8 @@ The semantic model is optional. If no usable model is configured, text search re
 
 ## Install from the F4 source release
 
+The bilingual installation site is available at <https://galgo2077.github.io/VRG/>.
+
 **Published channel:** [v0.4.0-f4 source release](https://github.com/galgo2077/VRG/releases/tag/v0.4.0-f4). The release contains code, tests and Cargo.lock but **no prebuilt binary assets**. An official crates.io publication has **not** been verified; do not assume `cargo install vrg` refers to this project. The Rust package declares version **0.1.0**, whereas **v0.4.0-f4** is the Phase 4 milestone tag.
 
 Requirements: Git, Rust **1.92+** and Cargo, plus native build tools needed by the locked dependencies. The maintained local validation environment is Void Linux; independent macOS and Windows support is not claimed.
