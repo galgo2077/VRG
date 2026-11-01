@@ -137,6 +137,7 @@ impl FilePlan {
         project: &Path,
         config_path: &Path,
     ) -> VrgResult<ApplyReport> {
+        ensure_supported_platform()?;
         if self.changes.is_empty() {
             return Ok(ApplyReport {
                 changed: 0,
@@ -258,6 +259,7 @@ impl FilePlan {
 }
 /// Revert only files which still match the exact written revision. Refuses external edits.
 pub fn recover_transaction(backup: &Path) -> VrgResult<usize> {
+    ensure_supported_platform()?;
     checked_path(backup)?;
     let manifest = current(&backup.join("manifest.json"))?
         .ok_or_else(|| invalid("backup manifest missing"))?;
@@ -335,7 +337,18 @@ fn lock_project(project: &Path) -> VrgResult<(PathBuf, File)> {
 }
 /// Cooperating transactions with the same configuration share this lock even
 /// when they use different projects and data directories.
+/// Reject unsupported systems before any setup or download side effects.
+pub fn ensure_supported_platform() -> VrgResult<()> {
+    if cfg!(any(target_os = "linux", target_os = "macos")) {
+        Ok(())
+    } else {
+        Err(invalid(
+            "safe configuration locking is currently supported on Linux and macOS",
+        ))
+    }
+}
 fn lock_config(config_path: &Path) -> VrgResult<(PathBuf, File)> {
+    ensure_supported_platform()?;
     checked_path(config_path)?;
     let parent = config_path
         .parent()
@@ -347,14 +360,14 @@ fn lock_config(config_path: &Path) -> VrgResult<(PathBuf, File)> {
         .ok_or_else(|| invalid("configuration has no filename"))?;
     let normalized = parent.join(name);
     checked_path(&normalized)?;
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         let _ = (parent, name);
         return Err(invalid(
-            "safe configuration locking is currently supported only on Linux",
+            "safe configuration locking is currently supported on Linux and macOS",
         ));
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         use std::os::unix::{
             ffi::OsStrExt,
@@ -370,7 +383,7 @@ fn lock_config(config_path: &Path) -> VrgResult<(PathBuf, File)> {
             .write(true)
             .create(true)
             .mode(0o600)
-            .custom_flags(0o400000)
+            .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
             .open(&lock_path)?;
         let meta = lock.metadata()?;
         if !meta.is_file() || meta.nlink() != 1 || meta.mode() & 0o077 != 0 {

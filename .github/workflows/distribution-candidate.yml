@@ -1,0 +1,133 @@
+name: Distribution candidate
+
+on:
+  push:
+    branches: ['ci/setup-doctor-*']
+  workflow_dispatch:
+    inputs:
+      draft_tag:
+        description: Existing tag for a draft release after all jobs pass (leave empty for validation only)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  candidate:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            arch: x86_64
+          - name: macos-arm64
+            runner: macos-15
+            target: aarch64-apple-darwin
+            arch: arm64
+          - name: macos-x86_64
+            runner: macos-15-intel
+            target: x86_64-apple-darwin
+            arch: x86_64
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust 1.98
+        run: rustup toolchain install 1.98.0 --profile minimal
+      - name: Verify host and fetch locked Cargo dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = '${{ matrix.arch }}'
+          test "$(rustc +1.98.0 -vV | sed -n 's/^host: //p')" = '${{ matrix.target }}'
+          cargo +1.98.0 fetch --locked --target '${{ matrix.target }}'
+      - name: Build candidate using locked cached Cargo dependencies
+        run: cargo +1.98.0 build --release --locked --offline --target '${{ matrix.target }}'
+      - name: Verify executable from a directory outside checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/vrg-package"
+          cp "target/${{ matrix.target }}/release/vrg" "$RUNNER_TEMP/vrg-package/vrg"
+          test -x "$RUNNER_TEMP/vrg-package/vrg"
+          expected_version=$(cargo +1.98.0 metadata --locked --offline --no-deps --format-version 1 | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(p["version"] for p in d["packages"] if p["name"] == "vrg"))')
+          test "$("$RUNNER_TEMP/vrg-package/vrg" --version)" = "vrg $expected_version"
+          "$RUNNER_TEMP/vrg-package/vrg" --help >/dev/null
+          cd "$RUNNER_TEMP"
+          python3 "$GITHUB_WORKSPACE/scripts/ci_distribution_smoke.py" "$RUNNER_TEMP/vrg-package/vrg"
+      - name: Package candidate and record environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(cargo +1.98.0 metadata --locked --offline --no-deps --format-version 1 | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(p["version"] for p in d["packages"] if p["name"] == "vrg"))')
+          PACKAGE_NAME="vrg-v${version}-${{ matrix.name }}"
+          stage="$RUNNER_TEMP/vrg-package"
+          cp LICENSE-* README.md "$stage/"
+          {
+            printf 'commit=%s\n' "$GITHUB_SHA"
+            printf 'runner=%s\n' "$RUNNER_OS"
+            printf 'platform='; uname -smr
+            rustc +1.98.0 -Vv
+            if [ "$(uname -s)" = Linux ]; then
+              ldd "$stage/vrg"
+              getconf GNU_LIBC_VERSION || true
+            else
+              sw_vers
+              otool -L "$stage/vrg"
+            fi
+          } > "$stage/BUILD-ENVIRONMENT.txt"
+          mkdir -p dist
+          tar -C "$RUNNER_TEMP" -czf "dist/${PACKAGE_NAME}.tar.gz" vrg-package
+          python3 -c 'import hashlib,pathlib,sys; p=pathlib.Path(sys.argv[1]); p.with_suffix(p.suffix+".sha256").write_text(hashlib.sha256(p.read_bytes()).hexdigest()+"  "+p.name+"\n")' "dist/${PACKAGE_NAME}.tar.gz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vrg-${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  draft:
+    if: github.event_name == 'workflow_dispatch' && inputs.draft_tag != ''
+    needs: candidate
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Verify existing tag and artifacts, then create draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRAFT_TAG: ${{ inputs.draft_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git check-ref-format "refs/tags/$DRAFT_TAG"
+          test "$(git rev-parse "refs/tags/$DRAFT_TAG^{commit}")" = "$GITHUB_SHA"
+          if gh release view "$DRAFT_TAG" >/dev/null 2>&1; then
+            echo 'A release already exists for this tag.' >&2; exit 1
+          fi
+          python3 - <<'PY'
+          import hashlib, os, pathlib
+          root = pathlib.Path('artifacts')
+          tag = os.environ['DRAFT_TAG']
+          lines = []
+          for name in ('linux-x86_64', 'macos-arm64', 'macos-x86_64'):
+              folder = root / ('vrg-' + name)
+              archive = folder / ('vrg-' + tag + '-' + name + '.tar.gz')
+              checksum = archive.with_suffix(archive.suffix + '.sha256')
+              assert archive.is_file() and checksum.is_file()
+              digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+              assert digest == checksum.read_text().split()[0]
+              lines.append(f'{digest}  {archive.name}\n')
+          pathlib.Path('SHA256SUMS.txt').write_text(''.join(lines))
+          PY
+          gh release create "$DRAFT_TAG" --verify-tag --draft --title "$DRAFT_TAG" --notes 'Candidate artifacts; additional release gates and verification remain required.' artifacts/*/*.tar.gz SHA256SUMS.txt

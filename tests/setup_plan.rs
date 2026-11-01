@@ -198,6 +198,34 @@ fn external_precondition_change_blocks_application() {
     fs::remove_dir_all(p).unwrap();
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn config_lock_rejects_a_symlink_without_touching_its_target() {
+    use sha2::{Digest, Sha256};
+    use std::os::unix::fs::symlink;
+    let p = fixture();
+    let config = p.join("shared-config");
+    let name = format!(
+        ".vrg-config-{}.lock",
+        hex::encode(Sha256::digest(b"shared-config"))
+    );
+    let victim = p.join("victim");
+    fs::write(&victim, b"untouched").unwrap();
+    symlink(&victim, p.join(name)).unwrap();
+    let plan = FilePlan::new(vec![PlannedFile {
+        path: config.clone(),
+        content: b"new".to_vec(),
+    }])
+    .unwrap();
+    assert!(
+        plan.apply(&p.join("backup"), &p.join("project"), &config)
+            .is_err()
+    );
+    assert_eq!(fs::read(victim).unwrap(), b"untouched");
+    assert!(!config.exists());
+    fs::remove_dir_all(p).unwrap();
+}
+
 #[test]
 fn synthetic_profile_is_planned_without_writes_and_admits_only_sample() {
     let p = fixture();
@@ -225,5 +253,46 @@ fn synthetic_profile_is_planned_without_writes_and_admits_only_sample() {
     assert!(plan_setup(&options, vec![]).unwrap().changes().is_empty());
     fs::write(source.join("sample.md"), b"changed by user").unwrap();
     assert!(plan_setup(&options, vec![]).is_err());
+    fs::remove_dir_all(p).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn cli_resolves_ancestor_alias_but_rejects_a_symlink_root() {
+    use std::os::unix::fs::symlink;
+    let p = fixture();
+    let alias = p.join("alias");
+    symlink(&p, &alias).unwrap();
+    let run = |root: &std::path::Path| {
+        std::process::Command::new(env!("CARGO_BIN_EXE_vrg"))
+            .env("HOME", &p)
+            .env("XDG_CONFIG_HOME", p.join("cfg"))
+            .env("XDG_DATA_HOME", p.join("data"))
+            .env_remove("VRG_CONFIG")
+            .env_remove("VRG_DATA_DIR")
+            .args(["setup", "--project"])
+            .arg(p.join("project"))
+            .args(["--root"])
+            .arg(root)
+            .args([
+                "--cli-only",
+                "--text-only",
+                "--non-interactive",
+                "--dry-run",
+            ])
+            .output()
+            .unwrap()
+    };
+    let resolved = run(&alias.join("notes"));
+    assert!(
+        resolved.status.success(),
+        "{}",
+        String::from_utf8_lossy(&resolved.stderr)
+    );
+    assert!(String::from_utf8_lossy(&resolved.stdout).contains(p.join("notes").to_str().unwrap()));
+    let leaf = p.join("leaf");
+    symlink(p.join("notes"), &leaf).unwrap();
+    assert!(!run(&leaf).status.success());
+    assert!(!p.join("cfg").exists());
     fs::remove_dir_all(p).unwrap();
 }

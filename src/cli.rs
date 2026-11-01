@@ -469,6 +469,39 @@ fn absolute(path: PathBuf) -> VrgResult<PathBuf> {
     }
 }
 
+/// Resolve existing ancestor aliases (such as macOS /var) before planning.
+/// A selected leaf symlink or parent traversal is never accepted.
+fn normalized(path: PathBuf) -> VrgResult<PathBuf> {
+    let path = absolute(path)?;
+    if path
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Err(VrgError::InvalidConfig(
+            "path contains parent traversal".into(),
+        ));
+    }
+    if fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err(VrgError::SymlinkRejected(path.display().to_string()));
+    }
+    let mut cursor = path.as_path();
+    let mut suffix = Vec::new();
+    while !cursor.exists() {
+        let name = cursor
+            .file_name()
+            .ok_or_else(|| VrgError::InvalidConfig("path has no existing ancestor".into()))?;
+        suffix.push(name.to_os_string());
+        cursor = cursor
+            .parent()
+            .ok_or_else(|| VrgError::InvalidConfig("path has no parent".into()))?;
+    }
+    let mut resolved = cursor.canonicalize()?;
+    for name in suffix.iter().rev() {
+        resolved.push(name);
+    }
+    Ok(resolved)
+}
+
 fn find_program(name: &str) -> Option<PathBuf> {
     env::var_os("PATH")
         .and_then(|paths| {
@@ -480,6 +513,7 @@ fn find_program(name: &str) -> Option<PathBuf> {
 }
 
 fn run_setup(explicit_config: Option<PathBuf>, mut args: SetupArgs) -> VrgResult<()> {
+    crate::setup::ensure_supported_platform()?;
     let interactive = !args.non_interactive && io::stdin().is_terminal();
     if let Some(backup) = args.recover.take() {
         let backup = absolute(backup)?;
@@ -603,25 +637,25 @@ fn run_setup(explicit_config: Option<PathBuf>, mut args: SetupArgs) -> VrgResult
             "non-interactive application requires --yes".into(),
         ));
     }
-    let project = absolute(args.project.expect("project checked"))?.canonicalize()?;
+    let project = normalized(args.project.expect("project checked"))?.canonicalize()?;
     let roots = args
         .roots
         .into_iter()
-        .map(absolute)
+        .map(normalized)
         .collect::<VrgResult<Vec<_>>>()?;
-    let config_path = absolute(
+    let config_path = normalized(
         match explicit_config.or_else(|| env::var_os("VRG_CONFIG").map(PathBuf::from)) {
             Some(path) => path,
             None => default_config_path()?,
         },
     )?;
     let data_dir = match args.data_dir {
-        Some(path) => absolute(path)?,
-        None => VrgConfig::default().data_dir,
+        Some(path) => normalized(path)?,
+        None => normalized(VrgConfig::default().data_dir)?,
     };
-    let memory_dir = args.memory_dir.map(absolute).transpose()?;
-    let download = args.download_model.map(absolute).transpose()?;
-    let model_dir = match args.model_dir.map(absolute).transpose()? {
+    let memory_dir = args.memory_dir.map(normalized).transpose()?;
+    let download = args.download_model.map(normalized).transpose()?;
+    let model_dir = match args.model_dir.map(normalized).transpose()? {
         Some(path) => {
             if !path.is_dir() {
                 return Err(VrgError::InvalidConfig(
@@ -744,8 +778,15 @@ fn run_setup(explicit_config: Option<PathBuf>, mut args: SetupArgs) -> VrgResult
     } else {
         println!("No downloads planned.");
     }
+    for root in &options.roots {
+        println!("  Authorized source: {}", root.display());
+    }
+    println!("  Derived data: {}", options.data_dir.display());
+    if let Some(memory) = &options.memory_dir {
+        println!("  Authorized operational memory: {}", memory.display());
+    }
     for path in plan.changes() {
-        println!("  {}", path.display());
+        println!("  File: {}", path.display());
     }
     println!(
         "Authorized source roots are local. MCP results may be shared with the configured Codex model when used; setup does not authorize transfer of unrelated material."
@@ -806,6 +847,7 @@ fn run_doctor(config: Option<PathBuf>, args: DoctorArgs) -> VrgResult<()> {
         ));
     }
     if args.fix {
+        crate::setup::ensure_supported_platform()?;
         let project = env::current_dir()?.canonicalize()?;
         let plan = crate::doctor::repair_plan(&project, config.as_deref())?;
         eprintln!("Recognized repair plan: {} file(s)", plan.changes().len());
