@@ -109,7 +109,7 @@ jobs:
           expected=$(awk '{print $1}' "$RUNNER_TEMP/ort/SHA256.txt")
           actual=$(shasum -a 256 "$RUNNER_TEMP/ort/libonnxruntime.dylib" | awk '{print $1}')
           test "$expected" = "$actual"
-          lipo -verify_arch x86_64 "$RUNNER_TEMP/ort/libonnxruntime.dylib"
+          lipo "$RUNNER_TEMP/ort/libonnxruntime.dylib" -verify_arch x86_64
       - name: Verify executable from a directory outside checkout
         shell: bash
         run: |

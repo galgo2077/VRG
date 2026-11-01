@@ -29,13 +29,29 @@ jobs:
           cd "$RUNNER_TEMP/onnxruntime"
           # --skip_tests skips execution; the CMake option also avoids building upstream test binaries.
           ./build.sh --config Release --build_shared_lib --parallel 4 --skip_tests --skip_submodule_sync --osx_arch x86_64 --build_dir "$RUNNER_TEMP/ort-build" --cmake_extra_defines onnxruntime_BUILD_UNIT_TESTS=OFF
+      - name: Preserve compiled library for diagnosis
+        shell: bash
+        run: |
+          set -euo pipefail
+          lib="$RUNNER_TEMP/ort-build/Release/libonnxruntime.1.24.1.dylib"
+          test -f "$lib"
+          mkdir -p "$RUNNER_TEMP/ort-unverified"
+          cp "$lib" "$RUNNER_TEMP/ort-unverified/libonnxruntime.dylib"
+          cp "$RUNNER_TEMP/onnxruntime/LICENSE" "$RUNNER_TEMP/onnxruntime/ThirdPartyNotices.txt" "$RUNNER_TEMP/ort-unverified/"
+          shasum -a 256 "$RUNNER_TEMP/ort-unverified/libonnxruntime.dylib" > "$RUNNER_TEMP/ort-unverified/SHA256.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: onnxruntime-1.24.1-macos-intel-unverified
+          path: ${{ runner.temp }}/ort-unverified/*
+          if-no-files-found: error
+          retention-days: 7
       - name: Check architecture and API 24
         shell: bash
         run: |
           set -euo pipefail
-          lib=$(find "$RUNNER_TEMP/ort-build" -type f -name 'libonnxruntime*.dylib' | head -1)
-          test -n "$lib"
-          lipo -verify_arch x86_64 "$lib"
+          lib="$RUNNER_TEMP/ort-build/Release/libonnxruntime.1.24.1.dylib"
+          test -f "$lib"
+          lipo "$lib" -verify_arch x86_64
           otool -L "$lib"
           cat > "$RUNNER_TEMP/ort-api.c" <<'C'
           #include <dlfcn.h>
