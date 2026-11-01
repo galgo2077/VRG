@@ -4,7 +4,7 @@
 
 ## Current distribution
 - **Build from source:** [English guide](SETUP.md) / [Guía en español](SETUP.es.md).
-- **No prebuilt downloads** are attached to v0.4.0-f4.
+- A Linux x86_64 archive is attached to v0.4.0-f4; it was tested on Void Linux only.
 - **No official crates.io publication** for this project has been independently verified.
 - **Version labels:** Cargo `0.1.0`, milestone tag `v0.4.0-f4`. A later semantic-versioned distribution decision is needed.
 

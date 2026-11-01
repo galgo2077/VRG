@@ -1,6 +1,6 @@
 # VRG — Install, configure and verify
 
-> **Release channel (1 November 2026).** [`v0.4.0-f4`](https://github.com/galgo2077/VRG/releases/tag/v0.4.0-f4) is a **source release**, with Rust application code, tests and `Cargo.lock`, but **no prebuilt binary assets**. The crate has not been verified as published under this project's ownership on crates.io; don't assume `cargo install vrg` downloads this project. The tag is a **Phase 4 release label**; the Cargo package still reports `0.1.0`. macOS and Windows aren't certified, and the portable Unix hook observer is not the same implementation as the original local G04 verification.
+> **Release channel (1 November 2026).** [`v0.4.0-f4`](https://github.com/galgo2077/VRG/releases/tag/v0.4.0-f4) is a **source release**, with Rust application code, tests and `Cargo.lock`, plus a verified **Linux x86_64 binary archive** tested on Void Linux (glibc 2.41). The crate has not been verified as published under this project's ownership on crates.io; don't assume `cargo install vrg` downloads this project. The tag is a **Phase 4 release label**; the Cargo package still reports `0.1.0`. macOS and Windows aren't certified, and the portable Unix hook observer is not the same implementation as the original local G04 verification.
 
 [Website setup](../setup.html) · [Español](SETUP.es.md) · [Existing operator guide](../PUBLIC_INSTALL.md) · [Source code](https://github.com/galgo2077/VRG)
 
@@ -27,6 +27,20 @@ If a command is missing, install it with your distribution's normal package mana
 
 ## 2. Download and compile (available now)
 
+**Linux x86_64 binary:** tested on Void Linux; requires GLIBC 2.38 and GLIBCXX 3.4.31 symbols. SHA-256: `4c5c6c5432e6f6c3d89d6e50498379a9b3c4f6617f71a7e7da32aec47fbc3c52`.
+
+```sh
+VRG_DOWNLOAD_DIR="$(mktemp -d /tmp/vrg-download.XXXXXXXX)" || exit 1
+( cd "$VRG_DOWNLOAD_DIR" &&
+  curl -fLO https://github.com/galgo2077/VRG/releases/download/v0.4.0-f4/vrg-v0.4.0-f4-linux-x86_64.tar.gz &&
+  curl -fLO https://github.com/galgo2077/VRG/releases/download/v0.4.0-f4/SHA256SUMS.txt &&
+  sha256sum -c SHA256SUMS.txt &&
+  tar -xzf vrg-v0.4.0-f4-linux-x86_64.tar.gz &&
+  ./vrg-v0.4.0-f4-linux-x86_64/vrg --help )
+```
+
+
+
 **Recommended source build from the fixed F4 tag:**
 
 ```sh
@@ -36,6 +50,8 @@ cargo build --release --locked
 test -x target/release/vrg
 ./target/release/vrg --help
 ```
+
+The locked Linux graph declares Rust 1.92 as its highest minimum; the recorded build used Rust 1.98. The `ort-sys` build can separately download native ONNX Runtime binaries if its native cache is empty, even when Cargo is offline. The recorded build reused a pre-existing native cache.
 
 The first build fetches dependencies from Cargo's configured registry if needed. `--locked` holds the lockfile version selection. An offline build is only possible after those packages are cached:
 
@@ -165,7 +181,7 @@ F4-03 requires a verified local model and environment variable `VRG_F4_MODEL_DIR
 ## 8. Distribution status
 
 - **Source:** [v0.4.0-f4 release](https://github.com/galgo2077/VRG/releases/tag/v0.4.0-f4).
-- **Prebuilt release binaries:** none on that release.
+- **Prebuilt release binary:** Linux x86_64, tested on Void Linux. [Archive](https://github.com/galgo2077/VRG/releases/download/v0.4.0-f4/vrg-v0.4.0-f4-linux-x86_64.tar.gz) · [SHA256SUMS](https://github.com/galgo2077/VRG/releases/download/v0.4.0-f4/SHA256SUMS.txt). SHA-256: `4c5c6c5432e6f6c3d89d6e50498379a9b3c4f6617f71a7e7da32aec47fbc3c52`. Requires GLIBC 2.38 and GLIBCXX 3.4.31 symbols; other distributions are not certified.
 - **crates.io package:** no verified official publication for this project.
 - **Cargo package version:** `0.1.0`. The tag `v0.4.0-f4` identifies the **Phase 4 source milestone**, not the Cargo semver release.
 - **Certified OS:** local cases on Void Linux. Do not claim native Windows or macOS support until independently verified.

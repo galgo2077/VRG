@@ -1,6 +1,6 @@
 # VRG — Instalar, configurar y comprobar
 
-> **Estado (1 de noviembre de 2026).** [`v0.4.0-f4`](https://github.com/galgo2077/VRG/releases/tag/v0.4.0-f4) es un **release de código fuente**: contiene Rust y `Cargo.lock`, pero **no binarios adjuntos**. No hay una publicación en crates.io verificada para este proyecto: no asumas que `cargo install vrg` instala este VRG. El tag identifica el hito F4; `Cargo.toml` continúa declarando `0.1.0`. macOS y Windows no están certificados.
+> **Estado (1 de noviembre de 2026).** [`v0.4.0-f4`](https://github.com/galgo2077/VRG/releases/tag/v0.4.0-f4) es un **release de código fuente**: contiene Rust y `Cargo.lock`, y un **binario Linux x86_64** verificado en Void Linux (glibc 2.41). No hay una publicación en crates.io verificada para este proyecto: no asumas que `cargo install vrg` instala este VRG. El tag identifica el hito F4; `Cargo.toml` continúa declarando `0.1.0`. macOS y Windows no están certificados.
 
 [Guía web](../es/setup.html) · [English](SETUP.md) · [Manual avanzado](../PUBLIC_INSTALL.md) · [GitHub](https://github.com/galgo2077/VRG)
 
@@ -24,6 +24,20 @@ En Void Linux puedes consultar nombres de paquetes mediante `xbps-query -Rs`; no
 
 ## 2. Descargar y compilar (DISPONIBLE)
 
+**Binario Linux x86_64:** probado en Void Linux; requiere símbolos GLIBC 2.38 y GLIBCXX 3.4.31. SHA-256: `4c5c6c5432e6f6c3d89d6e50498379a9b3c4f6617f71a7e7da32aec47fbc3c52`.
+
+```sh
+VRG_DOWNLOAD_DIR="$(mktemp -d /tmp/vrg-download.XXXXXXXX)" || exit 1
+( cd "$VRG_DOWNLOAD_DIR" &&
+  curl -fLO https://github.com/galgo2077/VRG/releases/download/v0.4.0-f4/vrg-v0.4.0-f4-linux-x86_64.tar.gz &&
+  curl -fLO https://github.com/galgo2077/VRG/releases/download/v0.4.0-f4/SHA256SUMS.txt &&
+  sha256sum -c SHA256SUMS.txt &&
+  tar -xzf vrg-v0.4.0-f4-linux-x86_64.tar.gz &&
+  ./vrg-v0.4.0-f4-linux-x86_64/vrg --help )
+```
+
+
+
 ```sh
 git clone --branch v0.4.0-f4 --depth 1 https://github.com/galgo2077/VRG.git
 cd VRG
@@ -31,6 +45,8 @@ cargo build --release --locked
 test -x target/release/vrg
 ./target/release/vrg --help
 ```
+
+El grafo fijado para Linux declara Rust 1.92 como mínimo máximo; la compilación registrada usó Rust 1.98. El build de `ort-sys` puede descargar por separado ONNX Runtime nativo si no está en caché, incluso con Cargo offline. La compilación registrada reutilizó esa caché.
 
 La primera compilación puede necesitar red para descargar las dependencias fijadas. Cuando ya están en caché se puede ejecutar:
 
@@ -162,7 +178,7 @@ F4-03 necesita `VRG_F4_MODEL_DIR` y un modelo local de hash verificado. Usa `--o
 ## 8. Estado de distribución
 
 - **Código fuente:** [release v0.4.0-f4](https://github.com/galgo2077/VRG/releases/tag/v0.4.0-f4).
-- **Binarios listos:** ninguno adjunto al release.
+- **Binario listo:** Linux x86_64, probado en Void Linux. [Archivo](https://github.com/galgo2077/VRG/releases/download/v0.4.0-f4/vrg-v0.4.0-f4-linux-x86_64.tar.gz) · [SHA256SUMS](https://github.com/galgo2077/VRG/releases/download/v0.4.0-f4/SHA256SUMS.txt). SHA-256: `4c5c6c5432e6f6c3d89d6e50498379a9b3c4f6617f71a7e7da32aec47fbc3c52`. Requiere símbolos GLIBC 2.38 y GLIBCXX 3.4.31; otras distribuciones no están certificadas.
 - **crates.io:** sin publicación oficial verificada para este proyecto.
 - **Versión de Cargo:** `0.1.0`; tag `v0.4.0-f4` = hito Fase 4.
 - **Sistema validado:** Void Linux y casos locales; macOS/Windows requieren pruebas separadas.
