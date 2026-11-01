@@ -16,6 +16,8 @@ pub mod storage;
 pub mod text_search;
 pub mod vault;
 
+#[cfg(test)]
+mod intel_runtime;
 mod engine;
 mod note_write;
 
