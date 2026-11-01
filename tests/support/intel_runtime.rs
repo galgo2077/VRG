@@ -15,7 +15,7 @@ use std::{
 };
 
 fn fixture() -> std::path::PathBuf {
-    let path = std::env::temp_dir().join(format!(
+    let path = std::env::temp_dir().canonicalize().unwrap().join(format!(
         "vrg-runtime-test-{}-{}",
         std::process::id(),
         SystemTime::now()
