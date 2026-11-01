@@ -1,0 +1,45 @@
+name: ONNX Runtime Intel inference probe
+on:
+  push:
+    branches: ['ci/onnx-inference-*']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  inference:
+    runs-on: macos-15-intel
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Retrieve the successful official-source runtime probe
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = x86_64
+          run_id=$(gh api 'repos/${{ github.repository }}/actions/runs?branch=ci%2Fonnx-source-20261101&status=success&per_page=20' --jq '[.workflow_runs[] | select(.name == "ONNX Runtime Intel source probe")][0].id')
+          test -n "$run_id" && test "$run_id" != null
+          gh run download "$run_id" --repo '${{ github.repository }}' --name onnxruntime-1.24.1-macos-intel-probe --dir "$RUNNER_TEMP/ort"
+          expected=$(awk '{print $1}' "$RUNNER_TEMP/ort/SHA256.txt")
+          actual=$(shasum -a 256 "$RUNNER_TEMP/ort/libonnxruntime.dylib" | awk '{print $1}')
+          test "$expected" = "$actual"
+      - name: Fetch pinned small upstream fixture and headers
+        shell: bash
+        run: |
+          set -euo pipefail
+          base='https://raw.githubusercontent.com/microsoft/onnxruntime/470ae16099a74fe05e31f2530489332c0525edb5'
+          curl --fail --location --silent --show-error "$base/include/onnxruntime/core/session/onnxruntime_c_api.h" -o "$RUNNER_TEMP/ort/onnxruntime_c_api.h"
+          curl --fail --location --silent --show-error "$base/include/onnxruntime/core/session/onnxruntime_ep_c_api.h" -o "$RUNNER_TEMP/ort/onnxruntime_ep_c_api.h"
+          curl --fail --location --silent --show-error "$base/onnxruntime/test/testdata/mul_1.onnx" -o "$RUNNER_TEMP/ort/mul_1.onnx"
+          cd "$RUNNER_TEMP/ort"
+          printf '%s  %s\n' \
+            9ed0d7054a4e74249467365b25b415d36f51a44a6349e2a994a1812e4723d1e2 onnxruntime_c_api.h \
+            e94ac3490697bdb107844fa9d403952ee7136134132a057eae5c1207b57ce352 onnxruntime_ep_c_api.h \
+            71f431c4e9321ec6fbeb158d02ed240459a7dcc98673fa79a4f439ce42efaf10 mul_1.onnx | shasum -a 256 -c
+      - name: Load API 24 and run synthetic CPU inference
+        shell: bash
+        run: |
+          set -euo pipefail
+          cc -Wall -Wextra -Werror -I "$RUNNER_TEMP/ort" scripts/ci_ort_session.c -o "$RUNNER_TEMP/ort/session-smoke"
+          "$RUNNER_TEMP/ort/session-smoke" "$RUNNER_TEMP/ort/libonnxruntime.dylib" "$RUNNER_TEMP/ort/mul_1.onnx"
