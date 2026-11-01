@@ -1,0 +1,64 @@
+name: ONNX Runtime Intel source probe
+on:
+  push:
+    branches: ['ci/onnx-source-*']
+permissions:
+  contents: read
+jobs:
+  runtime:
+    runs-on: macos-15-intel
+    timeout-minutes: 90
+    steps:
+      - name: Retrieve pinned upstream source and submodules
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = x86_64
+          git clone --branch v1.24.1 --depth 1 https://github.com/microsoft/onnxruntime.git "$RUNNER_TEMP/onnxruntime"
+          cd "$RUNNER_TEMP/onnxruntime"
+          test "$(git rev-parse HEAD)" = 470ae16099a74fe05e31f2530489332c0525edb5
+          git submodule update --init --recursive --depth 1
+      - name: Build native CPU shared runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/onnxruntime"
+          ./build.sh --config Release --build_shared_lib --parallel 4 --skip_tests --skip_submodule_sync --osx_arch x86_64 --build_dir "$RUNNER_TEMP/ort-build"
+      - name: Check architecture and API 24
+        shell: bash
+        run: |
+          set -euo pipefail
+          lib=$(find "$RUNNER_TEMP/ort-build" -type f -name 'libonnxruntime*.dylib' | head -1)
+          test -n "$lib"
+          lipo -verify_arch x86_64 "$lib"
+          otool -L "$lib"
+          cat > "$RUNNER_TEMP/ort-api.c" <<'C'
+          #include <dlfcn.h>
+          #include <stdio.h>
+          #include "onnxruntime_c_api.h"
+          int main(int argc, char **argv) {
+              if (argc != 2) return 1;
+              void *h = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+              if (!h) { fprintf(stderr, "%s\n", dlerror()); return 2; }
+              const OrtApiBase *(*get_base)(void) = dlsym(h, "OrtGetApiBase");
+              if (!get_base) return 3;
+              const OrtApiBase *base = get_base();
+              if (!base || !base->GetApi(24)) return 4;
+              puts(base->GetVersionString());
+              return 0;
+          }
+          C
+          cc -I "$RUNNER_TEMP/onnxruntime/include/onnxruntime/core/session" "$RUNNER_TEMP/ort-api.c" -o "$RUNNER_TEMP/ort-api"
+          "$RUNNER_TEMP/ort-api" "$lib"
+          mkdir -p "$RUNNER_TEMP/ort-artifact"
+          cp "$lib" "$RUNNER_TEMP/ort-artifact/libonnxruntime.dylib"
+          cp "$RUNNER_TEMP/onnxruntime/LICENSE" "$RUNNER_TEMP/onnxruntime/ThirdPartyNotices.txt" "$RUNNER_TEMP/ort-artifact/"
+          sw_vers > "$RUNNER_TEMP/ort-artifact/BUILD-ENVIRONMENT.txt"
+          otool -L "$lib" >> "$RUNNER_TEMP/ort-artifact/BUILD-ENVIRONMENT.txt"
+          shasum -a 256 "$RUNNER_TEMP/ort-artifact/libonnxruntime.dylib" > "$RUNNER_TEMP/ort-artifact/SHA256.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: onnxruntime-1.24.1-macos-intel-probe
+          path: ${{ runner.temp }}/ort-artifact/*
+          if-no-files-found: error
+          retention-days: 7
