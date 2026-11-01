@@ -30,6 +30,48 @@ pub struct SemanticMatch {
     pub score: f32,
 }
 
+/// Runtime path is stable beside the installed executable, independent of the checkout.
+/// No Intel macOS runtime is currently distributed or certified by VRG.
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+pub(crate) fn macos_intel_runtime_path() -> VrgResult<std::path::PathBuf> {
+    let executable = std::env::current_exe().map_err(|_| {
+        VrgError::SemanticUnavailable("cannot identify the installed executable".into())
+    })?;
+    let directory = executable.parent().ok_or_else(|| {
+        VrgError::SemanticUnavailable("installed executable has no parent directory".into())
+    })?;
+    Ok(directory.join("libonnxruntime.dylib"))
+}
+
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+fn initialize_macos_intel_runtime(path: &Path) -> VrgResult<()> {
+    let metadata = fs::symlink_metadata(path).map_err(|_| {
+        VrgError::SemanticUnavailable(format!(
+            "ONNX Runtime is unavailable at {}; macOS Intel runtime is not yet distributed by VRG",
+            path.display()
+        ))
+    })?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(VrgError::SemanticUnavailable(
+            "ONNX Runtime must be a regular non-symlink library beside the executable".into(),
+        ));
+    }
+    // ort validates its API version while loading. Convert its exceptional initialization
+    // paths to an ordinary semantic-unavailable result rather than aborting the caller.
+    std::panic::catch_unwind(|| ort::init_from(path).map(|_| ()))
+        .map_err(|_| {
+            VrgError::SemanticUnavailable(
+                "ONNX Runtime initialization failed; verify the library and API compatibility"
+                    .into(),
+            )
+        })?
+        .map_err(|error| {
+            VrgError::SemanticUnavailable(format!(
+                "ONNX Runtime is incompatible or could not be loaded: {error}"
+            ))
+        })
+}
+
 impl LocalEmbedder {
     /// Load a local multilingual E5 Small model from:
     /// `model.onnx`, `tokenizer.json`, `config.json`,
@@ -54,6 +96,8 @@ impl LocalEmbedder {
                 "multilingual-e5-small max_length must be between 1 and 512".into(),
             ));
         }
+        #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+        initialize_macos_intel_runtime(&macos_intel_runtime_path()?)?;
 
         let root_metadata = fs::symlink_metadata(&config.model_dir).map_err(|error| {
             VrgError::SemanticUnavailable(format!(
@@ -282,4 +326,31 @@ fn validate_vector(vector: &[f32], expected_dimensions: usize) -> VrgResult<()> 
 
 fn l2_norm(vector: &[f32]) -> f32 {
     vector.iter().map(|value| value * value).sum::<f32>().sqrt()
+}
+
+#[cfg(all(test, target_os = "macos", target_arch = "x86_64"))]
+mod macos_intel_runtime_tests {
+    use super::*;
+
+    #[test]
+    fn missing_or_invalid_runtime_is_semantic_unavailable() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir =
+            std::env::temp_dir().join(format!("vrg-onnx-missing-{}-{nonce}", std::process::id()));
+        fs::create_dir(&dir).unwrap();
+        let lib = dir.join("libonnxruntime.dylib");
+        assert!(matches!(
+            initialize_macos_intel_runtime(&lib),
+            Err(VrgError::SemanticUnavailable(_))
+        ));
+        fs::write(&lib, b"not a Mach-O library").unwrap();
+        assert!(matches!(
+            initialize_macos_intel_runtime(&lib),
+            Err(VrgError::SemanticUnavailable(_))
+        ));
+        fs::remove_dir_all(dir).unwrap();
+    }
 }

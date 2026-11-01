@@ -1,0 +1,34 @@
+name: macOS Intel runtime probe
+on:
+  push:
+    branches: ['ci/ort-intel-*']
+permissions:
+  contents: read
+jobs:
+  intel:
+    runs-on: macos-15-intel
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Rust and verify native host
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.0 --profile minimal
+          test "$(uname -m)" = x86_64
+          test "$(rustc +1.98.0 -vV | sed -n 's/^host: //p')" = x86_64-apple-darwin
+      - name: Fetch locked dependencies
+        run: cargo +1.98.0 fetch --locked --target x86_64-apple-darwin
+      - name: Build Intel binary without unavailable prebuilt runtime
+        run: cargo +1.98.0 build --release --locked --offline --target x86_64-apple-darwin
+      - name: Verify absent or invalid runtime fails safely
+        run: cargo +1.98.0 test --locked --offline --target x86_64-apple-darwin --lib macos_intel_runtime_tests
+      - name: Exercise text-mode distribution outside checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/vrg-probe"
+          cp target/x86_64-apple-darwin/release/vrg "$RUNNER_TEMP/vrg-probe/vrg"
+          cd "$RUNNER_TEMP"
+          python3 "$GITHUB_WORKSPACE/scripts/ci_distribution_smoke.py" "$RUNNER_TEMP/vrg-probe/vrg"
+          otool -L "$RUNNER_TEMP/vrg-probe/vrg"

@@ -256,6 +256,36 @@ pub fn inspect(explicit: Option<&Path>, check_runtime: bool) -> DoctorReport {
                 "",
             ),
             Some(model) => {
+                #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+                match crate::semantic::macos_intel_runtime_path() {
+                    Ok(path) => {
+                        let available = fs::symlink_metadata(&path)
+                            .map(|m| m.is_file() && !m.file_type().is_symlink())
+                            .unwrap_or(false);
+                        add(
+                            &mut checks,
+                            "onnx_runtime",
+                            if available {
+                                CheckStatus::Unknown
+                            } else {
+                                CheckStatus::ActionRequired
+                            },
+                            if available {
+                                "ONNX Runtime library exists beside the executable; compatibility and loading are not verified"
+                            } else {
+                                "ONNX Runtime library is absent or not a regular file beside the executable; VRG does not yet distribute or certify this runtime for macOS Intel"
+                            },
+                            "Use a verified compatible ONNX Runtime library; semantic inference requires a separate real loading test.",
+                        );
+                    }
+                    Err(_) => add(
+                        &mut checks,
+                        "onnx_runtime",
+                        CheckStatus::Unknown,
+                        "The executable location could not be determined",
+                        "Inspect the installed executable and runtime location.",
+                    ),
+                }
                 let files = [
                     "model.onnx",
                     "tokenizer.json",
