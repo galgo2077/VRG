@@ -1,6 +1,6 @@
 # Installation and operation
 
-**Published F4 source channel:** [GitHub v0.4.0-f4](https://github.com/galgo2077/VRG/releases/tag/v0.4.0-f4) contains source, Cargo.lock and a verified Linux x86_64 archive. See the release checksum and platform limits in the setup guides. We could not verify a crates.io release for this project's identity. The Cargo package version is 0.1.0; the tag denotes the F4 milestone. For a safe copy-and-paste demo and all checks, use [the complete setup guide](public/SETUP.md) or [the Spanish guide](public/SETUP.es.md).
+**Published F4 source channel:** [GitHub v0.4.0-f4](https://github.com/galgo2077/VRG/releases/tag/v0.4.0-f4) contains source, Cargo.lock and a verified Linux x86_64 archive. See the release checksum and platform limits in the setup guides. The official [vrg 0.1.0 crate](https://crates.io/crates/vrg/0.1.0) is published; clean installation verification is in progress. The Cargo package version is 0.1.0; the tag denotes the F4 milestone. For a safe copy-and-paste demo and all checks, use [the complete setup guide](public/SETUP.md) or [the Spanish guide](public/SETUP.es.md).
 
 Quick source build (dependencies may need a first-time download):
 

@@ -1,6 +1,6 @@
 # VRG — Instalar, configurar y comprobar
 
-> **Estado (1 de noviembre de 2026).** [`v0.4.0-f4`](https://github.com/galgo2077/VRG/releases/tag/v0.4.0-f4) es un **release de código fuente**: contiene Rust y `Cargo.lock`, y un **binario Linux x86_64** verificado en Void Linux (glibc 2.41). No hay una publicación en crates.io verificada para este proyecto: no asumas que `cargo install vrg` instala este VRG. El tag identifica el hito F4; `Cargo.toml` continúa declarando `0.1.0`. macOS y Windows no están certificados.
+> **Estado (1 de noviembre de 2026).** [`v0.4.0-f4`](https://github.com/galgo2077/VRG/releases/tag/v0.4.0-f4) es un **release de código fuente**: contiene Rust y `Cargo.lock`, y un **binario Linux x86_64** verificado en Void Linux (glibc 2.41). El paquete oficial [vrg 0.1.0](https://crates.io/crates/vrg/0.1.0) está publicado bajo el propietario del proyecto; la instalación limpia está en verificación. El tag identifica el hito F4; `Cargo.toml` continúa declarando `0.1.0`. macOS y Windows no están certificados.
 
 [Guía web](../es/setup.html) · [English](SETUP.md) · [Manual avanzado](../PUBLIC_INSTALL.md) · [GitHub](https://github.com/galgo2077/VRG)
 
@@ -179,7 +179,7 @@ F4-03 necesita `VRG_F4_MODEL_DIR` y un modelo local de hash verificado. Usa `--o
 
 - **Código fuente:** [release v0.4.0-f4](https://github.com/galgo2077/VRG/releases/tag/v0.4.0-f4).
 - **Binario listo:** Linux x86_64, probado en Void Linux. [Archivo](https://github.com/galgo2077/VRG/releases/download/v0.4.0-f4/vrg-v0.4.0-f4-linux-x86_64.tar.gz) · [SHA256SUMS](https://github.com/galgo2077/VRG/releases/download/v0.4.0-f4/SHA256SUMS.txt). SHA-256: `4c5c6c5432e6f6c3d89d6e50498379a9b3c4f6617f71a7e7da32aec47fbc3c52`. Requiere símbolos GLIBC 2.38 y GLIBCXX 3.4.31; otras distribuciones no están certificadas.
-- **crates.io:** sin publicación oficial verificada para este proyecto.
+- **crates.io:** [vrg 0.1.0](https://crates.io/crates/vrg/0.1.0), bajo el propietario del proyecto; instalación limpia en verificación.
 - **Versión de Cargo:** `0.1.0`; tag `v0.4.0-f4` = hito Fase 4.
 - **Sistema validado:** Void Linux y casos locales; macOS/Windows requieren pruebas separadas.
 

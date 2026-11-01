@@ -1,6 +1,6 @@
 # Getting started
 
-The complete source is published in [VRG F4 v0.4.0-f4](https://github.com/galgo2077/VRG/releases/tag/v0.4.0-f4), and includes a Linux x86_64 archive tested on Void Linux. No official crates.io listing has been verified.
+The complete source is published in [VRG F4 v0.4.0-f4](https://github.com/galgo2077/VRG/releases/tag/v0.4.0-f4), and includes a Linux x86_64 archive tested on Void Linux. The official [vrg 0.1.0 crate](https://crates.io/crates/vrg/0.1.0) is published; clean installation verification is in progress.
 
 - [Full English setup and tests](SETUP.md)
 - [Guía completa en español](SETUP.es.md)
