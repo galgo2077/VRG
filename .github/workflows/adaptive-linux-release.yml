@@ -81,6 +81,17 @@ jobs:
               'ort-sys=2.0.0-rc.15\nupstream_distribution=pyke:ort-rs/ms@1.31.0\n'
               f'compressed_distribution_sha256={expected}\n')
           PY
+      - name: Retrieve matching native license notices with fixed checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          base='https://raw.githubusercontent.com/microsoft/onnxruntime/402979ac1bef89dcd55add41eaa7277c407599eb'
+          curl --disable --fail --location --silent --show-error --connect-timeout 15 --max-time 120 "$base/LICENSE" -o "$ORT_LIB_LOCATION/ONNXRUNTIME-LICENSE"
+          curl --disable --fail --location --silent --show-error --connect-timeout 15 --max-time 120 "$base/ThirdPartyNotices.txt" -o "$ORT_LIB_LOCATION/ONNXRUNTIME-ThirdPartyNotices.txt"
+          cd "$ORT_LIB_LOCATION"
+          printf '%s  %s\n' \
+            2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c ONNXRUNTIME-LICENSE \
+            143764b952fdb1a7c69ce653bfba74a7744d6a8a573bfb73e235fba356c83de3 ONNXRUNTIME-ThirdPartyNotices.txt | sha256sum --check
       - name: Build Linux candidate with offline Cargo and native downloads disabled
         env:
           CARGO_NET_OFFLINE: 'true'
