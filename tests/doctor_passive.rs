@@ -221,3 +221,35 @@ fn cli_recognizes_a_valid_project_mcp_table() {
     assert_eq!(check["status"], "PASS", "{check}");
     fs::remove_dir_all(root).unwrap();
 }
+
+#[cfg(unix)]
+#[test]
+fn doctor_rejects_a_source_replaced_by_a_symlink() {
+    let root = fixture();
+    let source = root.join("source");
+    let other = root.join("other");
+    fs::create_dir(&source).unwrap();
+    fs::create_dir(&other).unwrap();
+    let config = root.join("config.toml");
+    let q = |p: &std::path::Path| serde_json::to_string(&p.to_string_lossy().to_string()).unwrap();
+    fs::write(
+        &config,
+        format!(
+            "data_dir = {}\n[[roots]]\nid = \"fixture\"\npath = {}\n",
+            q(&root.join("data")),
+            q(&source)
+        ),
+    )
+    .unwrap();
+    fs::rename(&source, root.join("saved")).unwrap();
+    std::os::unix::fs::symlink(&other, &source).unwrap();
+    let report = inspect(Some(&config), false);
+    assert!(
+        report
+            .checks
+            .iter()
+            .any(|c| c.id == "source_root" && c.status == CheckStatus::Fail)
+    );
+    assert_eq!(report.exit_code(), 1);
+    fs::remove_dir_all(root).unwrap();
+}

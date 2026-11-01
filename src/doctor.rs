@@ -166,27 +166,44 @@ pub fn inspect(explicit: Option<&Path>, check_runtime: bool) -> DoctorReport {
             ),
         }
         for root in &config.roots {
-            let good = fs::metadata(&root.path)
-                .map(|m| m.is_dir())
-                .unwrap_or(false)
-                && root.path.canonicalize().is_ok();
+            let mut cursor = PathBuf::new();
+            let mut status = CheckStatus::Pass;
+            for component in root.path.components() {
+                if matches!(component, std::path::Component::ParentDir) {
+                    status = CheckStatus::Fail;
+                    break;
+                }
+                cursor.push(component.as_os_str());
+                match fs::symlink_metadata(&cursor) {
+                    Ok(meta) if meta.file_type().is_symlink() => {
+                        status = CheckStatus::Fail;
+                        break;
+                    }
+                    Ok(meta) if !meta.is_dir() => {
+                        status = CheckStatus::ActionRequired;
+                        break;
+                    }
+                    Ok(_) => {}
+                    Err(_) => {
+                        status = CheckStatus::ActionRequired;
+                        break;
+                    }
+                }
+            }
+            let evidence = match status {
+                CheckStatus::Pass => "available without symbolic links",
+                CheckStatus::Fail => "contains a symbolic link or parent traversal",
+                _ => "unavailable or not a directory",
+            };
             add(
                 &mut checks,
                 "source_root",
-                if good {
-                    CheckStatus::Pass
-                } else {
-                    CheckStatus::ActionRequired
-                },
-                format!(
-                    "Root {}: {}",
-                    root.id,
-                    if good { "available" } else { "unavailable" }
-                ),
-                if good {
+                status,
+                format!("Root {}: {evidence}", root.id),
+                if status == CheckStatus::Pass {
                     ""
                 } else {
-                    "Check the explicitly authorized root and its permissions."
+                    "Review the authorized root without following links or broadening access."
                 },
             );
         }
