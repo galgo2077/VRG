@@ -14,10 +14,43 @@ permissions:
   contents: read
 
 jobs:
+  model:
+    name: Prepare pinned semantic fixture
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Download the pinned upstream fixture once
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -m 700 "$RUNNER_TEMP/vrg-e5-model"
+          base=https://huggingface.co/intfloat/multilingual-e5-small/resolve/614241f622f53c4eeff9890bdc4f31cfecc418b3/onnx
+          for file in model.onnx tokenizer.json config.json special_tokens_map.json tokenizer_config.json; do
+            curl --disable --fail --location --silent --show-error --connect-timeout 15 --max-time 900 "$base/$file" -o "$RUNNER_TEMP/vrg-e5-model/$file"
+          done
+          cd "$RUNNER_TEMP/vrg-e5-model"
+          printf '%s  %s\n' \
+            ca456c06b3a9505ddfd9131408916dd79290368331e7d76bb621f1cba6bc8665 model.onnx \
+            0b44a9d7b51c3c62626640cda0e2c2f70fdacdc25bbbd68038369d14ebdf4c39 tokenizer.json \
+            bbb7c1333fc4b3e27fbc9cd5d2070aabcc1d4dfb99917c3633e772f97545a6b6 config.json \
+            d05497f1da52c5e09554c0cd874037a083e1dc1b9cfd48034d1c717f1afc07a7 special_tokens_map.json \
+            a1d6bc8734a6f635dc158508bef000f8e2e5a759c7d92f984b2c86e5ff53425b tokenizer_config.json | sha256sum --check
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pinned-e5-fixture
+          path: ${{ runner.temp }}/vrg-e5-model/*
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 1
+
   candidate:
     name: ${{ matrix.name }}
+    needs: model
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
     strategy:
       fail-fast: false
       matrix:
@@ -47,29 +80,63 @@ jobs:
           cargo +1.98.0 fetch --locked --target '${{ matrix.target }}'
       - name: Build candidate using locked cached Cargo dependencies
         run: cargo +1.98.0 build --release --locked --offline --target '${{ matrix.target }}'
+      - name: Prepare native Intel ONNX Runtime from verified source build
+        if: matrix.name == 'macos-x86_64'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_id=41332002867
+          run=$(gh api "repos/${{ github.repository }}/actions/runs/$run_id")
+          test "$(printf '%s' "$run" | jq -r .head_sha)" = 086fe85c2cc2164159258ce5b2f2840ef398e5c4
+          test "$(printf '%s' "$run" | jq -r .conclusion)" = success
+          artifact=$(gh api "repos/${{ github.repository }}/actions/runs/$run_id/artifacts" --jq '.artifacts[] | select(.name == "onnxruntime-1.24.1-macos-intel-probe" and .expired == false)')
+          artifact_id=$(printf '%s' "$artifact" | jq -r .id)
+          artifact_digest=$(printf '%s' "$artifact" | jq -r .digest)
+          test -n "$artifact_id" && test "$artifact_digest" != null
+          gh api "repos/${{ github.repository }}/actions/artifacts/$artifact_id/zip" > "$RUNNER_TEMP/ort.zip"
+          test "sha256:$(shasum -a 256 "$RUNNER_TEMP/ort.zip" | awk '{print $1}')" = "$artifact_digest"
+          mkdir -p "$RUNNER_TEMP/ort"
+          python3 - <<'PY'
+          import os, pathlib, zipfile
+          base = pathlib.Path(os.environ['RUNNER_TEMP'])
+          allowed = {'libonnxruntime.dylib', 'LICENSE', 'ThirdPartyNotices.txt', 'BUILD-ENVIRONMENT.txt', 'SHA256.txt'}
+          with zipfile.ZipFile(base / 'ort.zip') as archive:
+              assert set(archive.namelist()) == allowed
+              archive.extractall(base / 'ort')
+          PY
+          expected=$(awk '{print $1}' "$RUNNER_TEMP/ort/SHA256.txt")
+          actual=$(shasum -a 256 "$RUNNER_TEMP/ort/libonnxruntime.dylib" | awk '{print $1}')
+          test "$expected" = "$actual"
+          lipo -verify_arch x86_64 "$RUNNER_TEMP/ort/libonnxruntime.dylib"
       - name: Verify executable from a directory outside checkout
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/vrg-package"
           cp "target/${{ matrix.target }}/release/vrg" "$RUNNER_TEMP/vrg-package/vrg"
+          if [ '${{ matrix.name }}' = macos-x86_64 ]; then
+            cp "$RUNNER_TEMP/ort/libonnxruntime.dylib" "$RUNNER_TEMP/vrg-package/"
+            cp "$RUNNER_TEMP/ort/LICENSE" "$RUNNER_TEMP/vrg-package/ONNXRUNTIME-LICENSE"
+            cp "$RUNNER_TEMP/ort/ThirdPartyNotices.txt" "$RUNNER_TEMP/vrg-package/ONNXRUNTIME-THIRD-PARTY-NOTICES.txt"
+          fi
           test -x "$RUNNER_TEMP/vrg-package/vrg"
           expected_version=$(cargo +1.98.0 metadata --locked --offline --no-deps --format-version 1 | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(p["version"] for p in d["packages"] if p["name"] == "vrg"))')
           test "$("$RUNNER_TEMP/vrg-package/vrg" --version)" = "vrg $expected_version"
           "$RUNNER_TEMP/vrg-package/vrg" --help >/dev/null
           cd "$RUNNER_TEMP"
           python3 "$GITHUB_WORKSPACE/scripts/ci_distribution_smoke.py" "$RUNNER_TEMP/vrg-package/vrg"
+      - name: Retrieve the pinned semantic fixture
+        uses: actions/download-artifact@v4
+        with:
+          name: pinned-e5-fixture
+          path: ${{ runner.temp }}/vrg-e5-model
       - name: Verify real local semantic retrieval
         shell: bash
         run: |
           set -euo pipefail
-          model="$RUNNER_TEMP/vrg-e5-model"
-          mkdir -m 700 "$model"
-          base=https://huggingface.co/intfloat/multilingual-e5-small/resolve/614241f622f53c4eeff9890bdc4f31cfecc418b3/onnx
-          for file in model.onnx tokenizer.json config.json special_tokens_map.json tokenizer_config.json; do
-            curl --disable --fail --location --silent --show-error --connect-timeout 15 --max-time 900 "$base/$file" -o "$model/$file"
-          done
-          python3 scripts/ci_semantic_smoke.py "$RUNNER_TEMP/vrg-package/vrg" "$model"
+          python3 scripts/ci_semantic_smoke.py "$RUNNER_TEMP/vrg-package/vrg" "$RUNNER_TEMP/vrg-e5-model"
       - name: Package candidate and record environment
         shell: bash
         run: |
@@ -114,6 +181,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
+          pattern: vrg-*
       - name: Verify existing tag and artifacts, then create draft
         env:
           GH_TOKEN: ${{ github.token }}
