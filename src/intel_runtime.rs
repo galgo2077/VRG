@@ -86,7 +86,9 @@ fn open_nofollow(path: &Path) -> VrgResult<File> {
 }
 fn verify(path: &Path, size: u64, hash: &str) -> VrgResult<()> {
     let mut file = open_nofollow(path)?;
-    if file.metadata()?.len() != size {
+    let metadata = file.metadata()?;
+    private_owned(&metadata, false)?;
+    if metadata.len() != size {
         return Err(invalid("runtime size mismatch"));
     }
     let mut hasher = Sha256::new();
@@ -103,10 +105,42 @@ fn verify(path: &Path, size: u64, hash: &str) -> VrgResult<()> {
     }
     Ok(())
 }
-struct Staging(PathBuf);
+#[cfg(unix)]
+fn private_owned(meta: &fs::Metadata, directory: bool) -> VrgResult<()> {
+    use std::os::unix::fs::MetadataExt;
+    if meta.uid() != rustix::process::geteuid().as_raw()
+        || meta.mode() & 0o077 != 0
+        || (directory && !meta.is_dir())
+        || (!directory && (!meta.is_file() || meta.nlink() != 1))
+    {
+        return Err(invalid(
+            "runtime directory or file is not private and owned by the effective user",
+        ));
+    }
+    Ok(())
+}
+#[cfg(not(unix))]
+fn private_owned(_: &fs::Metadata, _: bool) -> VrgResult<()> {
+    Err(invalid("unsupported platform"))
+}
+#[cfg(unix)]
+fn same_inode(a: &fs::Metadata, b: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    a.dev() == b.dev() && a.ino() == b.ino()
+}
+#[cfg(not(unix))]
+fn same_inode(_: &fs::Metadata, _: &fs::Metadata) -> bool {
+    false
+}
+struct Staging(PathBuf, fs::Metadata);
 impl Drop for Staging {
     fn drop(&mut self) {
-        let _ = fs::remove_file(&self.0);
+        if fs::symlink_metadata(&self.0)
+            .ok()
+            .is_some_and(|m| m.is_file() && same_inode(&m, &self.1))
+        {
+            let _ = fs::remove_file(&self.0);
+        }
     }
 }
 /// Returns true when newly installed, false when an identical installation is reused.
@@ -119,6 +153,7 @@ pub fn install_runtime(
     sha256: &str,
     consent: bool,
     offline: bool,
+    validate_abi: &dyn Fn(&Path) -> VrgResult<()>,
 ) -> VrgResult<bool> {
     install_runtime_with_curl(
         destination,
@@ -128,6 +163,7 @@ pub fn install_runtime(
         consent,
         offline,
         Path::new("curl"),
+        validate_abi,
     )
 }
 
@@ -139,6 +175,7 @@ fn install_runtime_with_curl(
     consent: bool,
     offline: bool,
     curl: &Path,
+    validate_abi: &dyn Fn(&Path) -> VrgResult<()>,
 ) -> VrgResult<bool> {
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
@@ -152,11 +189,18 @@ fn install_runtime_with_curl(
     if size == 0 {
         return Err(invalid("runtime size must be positive"));
     }
+    let parent = destination
+        .parent()
+        .ok_or_else(|| invalid("runtime destination has no parent"))?;
+    check_path(parent)?;
+    private_owned(&fs::metadata(parent)?, true)?;
     match fs::symlink_metadata(destination) {
         Ok(_) => {
             verify(destination, size, sha256).map_err(|_| {
                 invalid("existing runtime differs or is unsafe; it was not replaced")
             })?;
+            validate_abi(destination)?;
+            verify(destination, size, sha256)?;
             return Ok(false);
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
@@ -168,18 +212,8 @@ fn install_runtime_with_curl(
     if !consent {
         return Err(invalid("runtime download requires explicit consent"));
     }
-    let parent = destination
-        .parent()
-        .ok_or_else(|| invalid("runtime destination has no parent"))?;
     if !parent.is_dir() {
         return Err(invalid("private runtime directory must already exist"));
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if fs::metadata(parent)?.permissions().mode() & 0o077 != 0 {
-            return Err(invalid("runtime directory must be private"));
-        }
     }
     #[cfg(unix)]
     {
@@ -194,7 +228,7 @@ fn install_runtime_with_curl(
         .duration_since(UNIX_EPOCH)
         .map_err(|e| invalid(e.to_string()))?
         .as_nanos();
-    let stage = Staging(parent.join(format!(".vrg-runtime-{}-{stamp}", std::process::id())));
+    let stage_path = parent.join(format!(".vrg-runtime-{}-{stamp}", std::process::id()));
     let mut opts = OpenOptions::new();
     opts.write(true).create_new(true);
     #[cfg(unix)]
@@ -202,9 +236,11 @@ fn install_runtime_with_curl(
         use std::os::unix::fs::OpenOptionsExt;
         opts.mode(0o600);
     }
-    let mut file = opts.open(&stage.0)?;
+    let mut file = opts.open(&stage_path)?;
+    let stage = Staging(stage_path, file.metadata()?);
     let mut child = Command::new(curl)
         .args([
+            "--disable",
             "--fail",
             "--location",
             "--silent",
@@ -262,15 +298,31 @@ fn install_runtime_with_curl(
         let _ = child.wait();
     }
     result?;
+    if !same_inode(&stage.1, &fs::symlink_metadata(&stage.0)?) {
+        return Err(invalid("runtime staging file changed"));
+    }
+    validate_abi(&stage.0)?;
+    if !same_inode(&stage.1, &fs::symlink_metadata(&stage.0)?) {
+        return Err(invalid(
+            "runtime staging file changed during ABI validation",
+        ));
+    }
+    verify(&stage.0, size, sha256)?;
     check_path(destination)?;
     match fs::hard_link(&stage.0, destination) {
         Ok(()) => {
+            let promoted = fs::symlink_metadata(destination)?;
+            if !same_inode(&stage.1, &promoted) {
+                return Err(invalid("runtime promotion identity mismatch"));
+            }
             File::open(parent)?.sync_all()?;
             Ok(true)
         }
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
             verify(destination, size, sha256)
                 .map_err(|_| invalid("runtime destination changed; it was not replaced"))?;
+            validate_abi(destination)?;
+            verify(destination, size, sha256)?;
             Ok(false)
         }
         Err(e) => Err(e.into()),

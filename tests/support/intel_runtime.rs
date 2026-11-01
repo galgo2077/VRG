@@ -1,4 +1,13 @@
-use super::install_runtime;
+fn install_runtime(
+    destination: &std::path::Path,
+    url: &str,
+    size: u64,
+    hash: &str,
+    consent: bool,
+    offline: bool,
+) -> crate::error::VrgResult<bool> {
+    super::install_runtime(destination, url, size, hash, consent, offline, &|_| Ok(()))
+}
 use sha2::{Digest, Sha256};
 use std::{
     fs,
@@ -40,6 +49,11 @@ fn offline_reuses_verified_but_never_creates_missing_or_replaces_different() {
     );
     assert!(!dest.exists());
     fs::write(&dest, b"example").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&dest, fs::Permissions::from_mode(0o600)).unwrap();
+    }
     assert!(
         !install_runtime(
             &dest,
@@ -140,7 +154,8 @@ fn stages_verified_download_and_discards_corrupt_or_interrupted_data() {
             &digest,
             true,
             false,
-            &script
+            &script,
+            &|_| Ok(())
         )
         .unwrap()
     );
@@ -155,7 +170,8 @@ fn stages_verified_download_and_discards_corrupt_or_interrupted_data() {
             &digest,
             true,
             false,
-            &script
+            &script,
+            &|_| Ok(())
         )
         .is_err()
     );
@@ -169,7 +185,8 @@ fn stages_verified_download_and_discards_corrupt_or_interrupted_data() {
             &digest,
             true,
             false,
-            &script
+            &script,
+            &|_| Ok(())
         )
         .is_err()
     );
@@ -181,5 +198,34 @@ fn stages_verified_download_and_discards_corrupt_or_interrupted_data() {
             .to_string_lossy()
             .starts_with(".vrg-runtime-")
     }));
+    fs::remove_dir_all(p).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn rejected_abi_never_promotes_a_verified_download() {
+    use std::os::unix::fs::PermissionsExt;
+    let p = fixture();
+    let script = p.join("fake-curl");
+    let dest = p.join("runtime");
+    fs::write(&script, b"#!/bin/sh\nprintf example\n").unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
+    let digest = hex::encode(Sha256::digest(b"example"));
+    let result = super::install_runtime_with_curl(
+        &dest,
+        "https://example.org/runtime",
+        7,
+        &digest,
+        true,
+        false,
+        &script,
+        &|_| {
+            Err(crate::error::VrgError::SemanticUnavailable(
+                "ABI rejected".into(),
+            ))
+        },
+    );
+    assert!(result.is_err());
+    assert!(!dest.exists());
     fs::remove_dir_all(p).unwrap();
 }
