@@ -399,7 +399,7 @@ fn am_t13_reads_stats_and_plans_do_not_publish_or_modify_sources() {
     assert!(!bad.data_dir.exists());
 }
 
-fn snapshot_files(path: &std::path::Path) -> Vec<(PathBuf, Vec<u8>)> {
+fn snapshot_files(path: &std::path::Path) -> Vec<(PathBuf, u64, String)> {
     let mut result = vec![];
     if let Ok(entries) = fs::read_dir(path) {
         for entry in entries {
@@ -408,7 +408,13 @@ fn snapshot_files(path: &std::path::Path) -> Vec<(PathBuf, Vec<u8>)> {
             if metadata.is_dir() {
                 result.extend(snapshot_files(&entry.path()));
             } else if metadata.is_file() {
-                result.push((entry.path(), fs::read(entry.path()).unwrap()));
+                use sha2::{Digest, Sha256};
+                let bytes = fs::read(entry.path()).unwrap();
+                result.push((
+                    entry.path(),
+                    bytes.len() as u64,
+                    hex::encode(Sha256::digest(&bytes)),
+                ));
             }
         }
     }
@@ -419,11 +425,35 @@ fn snapshot_files(path: &std::path::Path) -> Vec<(PathBuf, Vec<u8>)> {
 #[test]
 fn am_t11_passive_doctor_reports_archive_corruption_without_repair() {
     let f = Fixture::new();
-    let (config, engine, private) = indexed_fixture(&f);
+    let notes = f.0.join("notes");
+    fs::create_dir(&notes).unwrap();
+    let private = "# Private\n\nAM11 exact source remains intact.\n";
+    fs::write(notes.join("Private.md"), private).unwrap();
+    let mut config = f.base_config();
+    config.adaptive_memory.enabled = true;
+    config.roots.push(vrg::config::RootConfig {
+        id: "fixture".into(),
+        path: notes,
+        exclusions: vec![],
+        allowed_files: Some(vec!["Private.md".into()]),
+    });
     f.write_config(&config);
-    let record = engine.archive_source("fixture", "Private.md").unwrap();
-    drop(engine);
-    let manifest_id = record["object"]["manifest_id"].as_str().unwrap();
+    // Keep a quiescent connection alive across both snapshots. No Engine or
+    // watcher is started: unrelated connection shutdown/checkpoint activity
+    // must not race the passive-doctor immutability assertion.
+    let _store_guard = vrg::storage::DerivedStore::open(&config.data_dir).unwrap();
+    use sha2::{Digest, Sha256};
+    let revision = hex::encode(Sha256::digest(private.as_bytes()));
+    let archive_store = vrg::adaptive_codec::ArchiveStore::open(&config.data_dir).unwrap();
+    let record = archive_store
+        .archive(
+            "am-t11-private-scope",
+            "fixture:Private.md",
+            &revision,
+            private.as_bytes(),
+        )
+        .unwrap();
+    let manifest_id = record.manifest_id;
     let archive = config
         .data_dir
         .join("cold")
