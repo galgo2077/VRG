@@ -1,6 +1,6 @@
 # Adaptive Memory
 
-This guide describes the Adaptive Memory candidate for Linux x86_64 and Codex. It does not certify a published release. Existing profiles keep conservative defaults; enable the feature only on an explicitly authorized project profile after checking the release validation results.
+This guide describes VRG 0.5.0 Adaptive Memory for Linux x86_64 and Codex. See the [release report](ADAPTIVE_RELEASE_0.5.0.md) for the tested scope. Existing profiles keep conservative defaults; enable the feature only on an explicitly authorized project profile after checking the release validation results.
 
 [Español](ADAPTIVE_MEMORY.es.md) · [Setup](SETUP.md)
 

@@ -1,10 +1,10 @@
 # VRG — Install, configure and verify
 
-> **Release channel (1 November 2026).** [`v0.4.0-f4`](https://github.com/galgo2077/VRG/releases/tag/v0.4.0-f4) is a **source release**, with Rust application code, tests and `Cargo.lock`, plus a verified **Linux x86_64 binary archive** tested on Void Linux (glibc 2.41). The official [vrg 0.1.1 crate](https://crates.io/crates/vrg/0.1.1) is published under the project owner; version 0.1.1 was installed and smoke-tested on Void Linux x86_64. The tag is a **Phase 4 release label**; the F4 tagged source reports Cargo version `0.1.0`. macOS and Windows aren't certified, and the portable Unix hook observer is not the same implementation as the original local G04 verification.
+> **Version 0.5.0 guide — Linux x86_64 and Codex.** Distribution checks and public artifact verification are recorded in the [release record](https://github.com/galgo2077/VRG/releases/tag/v0.5.0). The version includes `setup`, `doctor` and opt-in Adaptive Memory.
 
-> **Published package 0.1.1:** configuration is manual; automated `setup` and `doctor` commands are not included in this release.
+The [historical v0.4.0-f4 tag](https://github.com/galgo2077/VRG/releases/tag/v0.4.0-f4) remains intact; its certifications are not repeated or transferred to this version. macOS and Windows are outside this scope.
 
-[Website setup](../setup.html) · [Español](SETUP.es.md) · [Existing operator guide](../PUBLIC_INSTALL.md) · [Source code](https://github.com/galgo2077/VRG)
+[Website setup](../setup.html) · [Español](SETUP.es.md) · [Adaptive Memory](ADAPTIVE_MEMORY.md) · [Operator guide](../PUBLIC_INSTALL.md)
 
 ## 1. Prerequisites
 
@@ -27,55 +27,50 @@ pkg-config --version
 
 If a command is missing, install it with your distribution's normal package manager. On Void Linux check precise package names with `xbps-query -Rs`. Do not assume an untested package install command works across all distributions.
 
-## 2. Download and compile (available now)
+## 2. Download or build 0.5.0
 
-**Linux x86_64 binary:** tested on Void Linux; requires GLIBC 2.38 and GLIBCXX 3.4.31 symbols. SHA-256: `4c5c6c5432e6f6c3d89d6e50498379a9b3c4f6617f71a7e7da32aec47fbc3c52`.
+**Linux x86_64 binary 0.5.0:** verify `SHA256SUMS.txt` before extracting. Archive SHA-256: `f16a22c34baef663d5b2baec49f05810bf7bdde8bb480f5e9d081dce20426ba6`. Measured symbol requirements: GLIBC 2.39, GLIBCXX 3.4.31 and CXXABI 1.3.11 (validated host glibc 2.41).
 
 ```sh
 VRG_DOWNLOAD_DIR="$(mktemp -d /tmp/vrg-download.XXXXXXXX)" || exit 1
 ( cd "$VRG_DOWNLOAD_DIR" &&
-  curl -fLO https://github.com/galgo2077/VRG/releases/download/v0.4.0-f4/vrg-v0.4.0-f4-linux-x86_64.tar.gz &&
-  curl -fLO https://github.com/galgo2077/VRG/releases/download/v0.4.0-f4/SHA256SUMS.txt &&
+  curl -fLO https://github.com/galgo2077/VRG/releases/download/v0.5.0/vrg-v0.5.0-linux-x86_64.tar.gz &&
+  curl -fLO https://github.com/galgo2077/VRG/releases/download/v0.5.0/SHA256SUMS.txt &&
   sha256sum -c SHA256SUMS.txt &&
-  tar -xzf vrg-v0.4.0-f4-linux-x86_64.tar.gz &&
-  ./vrg-v0.4.0-f4-linux-x86_64/vrg --help )
+  tar -xzf vrg-v0.5.0-linux-x86_64.tar.gz &&
+  ./vrg-v0.5.0-linux-x86_64/vrg --help )
 ```
 
 
 
-**Recommended source build from the fixed F4 tag:**
+**Source build from the fixed 0.5.0 tag, after preparing dependencies:**
 
 ```sh
-git clone --branch v0.4.0-f4 --depth 1 https://github.com/galgo2077/VRG.git
+git clone --branch v0.5.0 --depth 1 https://github.com/galgo2077/VRG.git
 cd VRG
-cargo build --release --locked
+ORT_LIB_LOCATION=/absolute/path/verified-onnxruntime ORT_OFFLINE=1 \
+  CARGO_NET_OFFLINE=true cargo build --release --locked --offline
 test -x target/release/vrg
 ./target/release/vrg --help
 ```
 
-The locked Linux graph declares Rust 1.92 as its highest minimum; the recorded build used Rust 1.98. The `ort-sys` build can separately download native ONNX Runtime binaries if its native cache is empty, even when Cargo is offline. The recorded build reused a pre-existing native cache.
+Building requires Rust 1.92+; the candidate uses Rust 1.98. Prepare the exact `Cargo.lock` dependencies and ONNX Runtime 1.31.0 native library separately. `--offline` cannot install missing dependencies. The [Linux workflow](https://github.com/galgo2077/VRG/blob/v0.5.0/.github/workflows/adaptive-linux-release.yml) records reproducible native preparation, with checksummed distribution and matching MIT/third-party notices.
 
-The first build fetches dependencies from Cargo's configured registry if needed. `--locked` holds the lockfile version selection. An offline build is only possible after those packages are cached:
+With the verified native library in its own directory, build without network:
 
 ```sh
-cargo build --release --locked --offline
+ORT_LIB_LOCATION=/absolute/path/verified-onnxruntime ORT_OFFLINE=1 \
+  CARGO_NET_OFFLINE=true cargo build --release --locked --offline
 ```
 
-**Alternative, unverified on a clean external machine:** Cargo supports installing directly from a tagged Git source:
+**Crates.io alternative, once 0.5.0 is published:**
 
 ```sh
-cargo install --git https://github.com/galgo2077/VRG.git --tag v0.4.0-f4 --locked
-vrg --help
-```
-
-That command builds from source; it does **not** download an official binary and is not a crates.io installation. If it fails in your environment, use the clone-and-build procedure and inspect the build error. The package version shown by `--version` can be `0.1.0` even though the tag is `v0.4.0-f4`.
-
-**Crates.io alternative:** version 0.1.1 was installed into a clean destination and smoke-tested on Void Linux x86_64.
-
-```sh
-cargo install vrg --locked
+cargo install vrg --version 0.5.0 --locked
 vrg --version
 ```
+
+`cargo install` compiles locally and can download crates and the native runtime. It does not download the official executable or guarantee an offline installation. The prebuilt Linux archive avoids that build preparation. E5 model files are separate and required only for semantic retrieval.
 
 ## 3. Run a safe smoke test with synthetic notes
 
@@ -141,7 +136,7 @@ The executable's actual command is `vrg --config CONFIG mcp serve`. Start a **ne
 
 ### Hooks and selective documentation
 
-The source includes a portable Unix example at `examples/codex/hooks.json.example` and `scripts/vrg_hook_observer.py`. They are **not automatically installed** or trusted. Review the scripts and source-specific environment variables `VRG_HOOK_EXECUTABLE` and `VRG_HOOK_EVIDENCE_DIR`; keep any evidence directory private and outside indexed roots. On Codex, open `/hooks`, review the exact `SessionStart`, `UserPromptSubmit` and `Stop` definitions, trust only if approved, then verify real event execution in a fresh session. The supplied portable observer has not inherited the certification of the original local observer.
+The source includes a portable Unix example at `examples/codex/hooks.json.example` and `scripts/vrg_hook_observer.py`. These are manual examples. Setup can create packaged project hook resources, but their actual definitions must still be reviewed and trusted in Codex. Review the scripts and source-specific environment variables `VRG_HOOK_EXECUTABLE` and `VRG_HOOK_EVIDENCE_DIR`; keep any evidence directory private and outside indexed roots. On Codex, open `/hooks`, review the exact `SessionStart`, `UserPromptSubmit` and `Stop` definitions, trust only if approved, then verify real event execution in a fresh session. The supplied portable observer has not inherited the certification of the original local observer.
 
 VRG's MCP is read-only. Codex may update **explicitly approved** project documentation through ordinary file tools, while VRG indexes the change. Do not store transcripts or automatically expand source permissions.
 
@@ -149,7 +144,7 @@ VRG's MCP is read-only. Codex may update **explicitly approved** project documen
 
 | Check | Expected evidence |
 |---|---|
-| Source | Repo/tag resolves to `v0.4.0-f4` |
+| Source | Repo/tag resolves to `v0.5.0` |
 | Build | `target/release/vrg` exists; `--help` responds |
 | Config | `status` reports the intended demo root |
 | Index | Only `demo.md` is indexed |
@@ -163,17 +158,7 @@ VRG's MCP is read-only. Codex may update **explicitly approved** project documen
 | Persistence | An independent session retrieves synthetic documented knowledge |
 | Recovery | Only derived/synthetic data used for destructive testing; original notes untouched |
 
-### Maintainer-directed F4 checks
-
-These tests are present in the F4 source tree. They require the correct fixture and dependency environment; do **not** run them against personal vaults or interpret success on one machine as cross-platform certification.
-
-```sh
-cargo test --locked --test codex_auto_sync f4_01_private_metadata_and_external_paths_are_excluded -- --exact
-cargo test --locked --features f4-instrumentation --test codex_auto_sync f4_04_concurrent_publication_and_journal_recovery_are_deterministic -- --exact
-cargo test --locked --test codex_auto_sync f4_05_mcp_exposes_read_only_tools_and_enforces_root_boundaries -- --exact
-```
-
-F4-03 requires a verified local model and environment variable `VRG_F4_MODEL_DIR`; refer to the maintainer's pinned model manifest before running it. Use `--offline` only when all dependencies are cached.
+Historical F4 checks remain tied to their original revision and environment. They are not a routine installation step or a new Adaptive Memory certification.
 
 ## 7. Troubleshooting
 
@@ -182,43 +167,33 @@ F4-03 requires a verified local model and environment variable `VRG_F4_MODEL_DIR
 | `cargo: command not found` | Install supported Rust toolchain with rustup |
 | Native dependency build fails | Inspect the crate error; install required compiler/system library |
 | No `target/release/vrg` | Verify build errors and package `[[bin]]` target |
-| `--offline` missing crates | Fetch locked dependencies once through an authorized online build |
+| `--offline` missing crates | Prepare the exact locked Cargo cache and verified native library explicitly |
 | `vrg status` fails | Inspect canonical config path, source root and derived-data permissions |
 | `sync_pending` or `stale` | Wait for legitimate reconciliation; don't present old hits as current |
 | MCP missing | Confirm `/mcp`, effective config and that Codex starts the right executable |
 | Hook `modified`/`untrusted` | Review current definition in `/hooks`; don't modify trust files |
 | Semantic model missing | Use text-only mode or install the verified model artifacts |
 
-## 8. Distribution status
+## 8. Distribution and operation 0.5.0
 
-- **Source:** [v0.4.0-f4 release](https://github.com/galgo2077/VRG/releases/tag/v0.4.0-f4).
-- **Prebuilt release binary:** Linux x86_64, tested on Void Linux. [Archive](https://github.com/galgo2077/VRG/releases/download/v0.4.0-f4/vrg-v0.4.0-f4-linux-x86_64.tar.gz) · [SHA256SUMS](https://github.com/galgo2077/VRG/releases/download/v0.4.0-f4/SHA256SUMS.txt). SHA-256: `4c5c6c5432e6f6c3d89d6e50498379a9b3c4f6617f71a7e7da32aec47fbc3c52`. Requires GLIBC 2.38 and GLIBCXX 3.4.31 symbols; other distributions are not certified.
-- **crates.io package:** [vrg 0.1.1](https://crates.io/crates/vrg/0.1.1), owned by the project owner; version 0.1.1 was installed and smoke-tested on Void Linux x86_64.
-- **Crates.io package version:** `0.1.1`; F4 source tag Cargo version: `0.1.0`. The tag `v0.4.0-f4` identifies the **Phase 4 source milestone**, not the Cargo semver release.
-- **Certified OS:** local cases on Void Linux. Do not claim native Windows or macOS support until independently verified.
+- [v0.5.0 release and source](https://github.com/galgo2077/VRG/releases/tag/v0.5.0).
+- [Linux x86_64 archive](https://github.com/galgo2077/VRG/releases/download/v0.5.0/vrg-v0.5.0-linux-x86_64.tar.gz) and [SHA256SUMS](https://github.com/galgo2077/VRG/releases/download/v0.5.0/SHA256SUMS.txt).
+- [vrg 0.5.0 crate](https://crates.io/crates/vrg/0.5.0). See the release record for independent download verification.
 
-See [Installation and operation](../PUBLIC_INSTALL.md) for additional owner/operator details and recovery.
+### Setup and doctor
 
-## Upcoming setup and doctor
-
-`vrg setup` and `vrg doctor` are under development and are **not in the published 0.1.1 crate or the F4 binary**. Continue using the manual steps in this guide until a newer release is verified. The candidate is designed to require explicit roots, distinguish text mode from a local model, and leave hook trust to the user. Model download, real Codex event execution and the full setup/recovery workflow have not yet been certified. MCP remains read-only.
-
-### Candidate workflow (development builds only)
-
-These commands describe the **unpublished, unvalidated candidate**, not the 0.1.1 crate or F4 binary. Build and test it in an isolated environment before relying on it. Run `vrg setup` in a terminal for guided choices; review its plan before applying. For a non-interactive text-only setup, substitute existing absolute project and Markdown-root paths and a dedicated memory path inside the project:
+Run `vrg setup` in a terminal for guided choices. For an authorized text-only project profile, review the preview first:
 
 ```sh
-vrg setup --project /path/to/project --root /path/to/approved-notes \
-  --text-only --codex --allow-remote-context \
-  --memory-dir /path/to/project/vrg-memory --non-interactive --yes --offline
-vrg doctor
-vrg doctor --json
+vrg --config /absolute/path/profile.toml setup \
+  --project /absolute/path/project --root /absolute/path/approved-notes \
+  --data-dir /absolute/path/derived --text-only --codex --allow-remote-context \
+  --memory-dir /absolute/path/project/vrg-memory --non-interactive --yes --offline --dry-run
+vrg --config /absolute/path/profile.toml doctor --json
 ```
 
-`--allow-remote-context` explicitly authorizes the configured Codex model to receive retrieved fragments from the selected roots; omit Codex and choose `--cli-only` if that transfer is not authorized. `--yes` confirms the displayed technical plan, not hook trust or additional roots. `--root` is repeatable, and `--data-dir` selects dedicated derived storage outside roots. Preview with `--dry-run`, which must not apply changes or download. A compatible local model may be selected with `--model-dir`; alternatively `--download-model /path/to/model` expresses download consent. The latter is incompatible with a network download in `--offline` mode. Download verification and model loading remain subject to final validation.
+Remove `--dry-run` to apply only the authorized plan. `--yes` does not grant hook trust. `--allow-remote-context` authorizes sending retrieved fragments to the configured Codex model; use `--cli-only` if that transfer is not authorized. `--root` is repeatable. `--model-dir` selects an existing model; `--download-model` explicitly requests download and cannot newly download in `--offline` mode.
 
-When setup creates project hooks, review their actual commands in Codex `/hooks` and approve them yourself if appropriate. Approval and a configuration file alone do not establish execution. The candidate `vrg doctor --check-runtime` runs a direct isolated MCP client, not a Codex session. `vrg doctor --fix --dry-run` previews recognized repairs; `vrg doctor --fix` applies only supported VRG-owned repairs. If setup reports an interrupted transaction, `vrg setup --recover /path/to/private/transaction --dry-run` previews recovery; rerun without `--dry-run` to confirm it interactively, or add `--yes` for a non-interactive confirmation. Recovery must not overwrite later user changes. Inspect reported conflicts rather than deleting source notes or databases.
+When hooks are created, review their actual commands in `/hooks` and check real events in a new session. Doctor is passive by default; `--check-runtime` uses an isolated MCP client and does not establish a real Codex session. `doctor --fix --dry-run` previews recognized VRG-owned repairs; `--fix` applies them without broadening permissions. `setup --recover /absolute/path/transaction --dry-run` previews recovery; later conflicts require review and never justify deleting notes or databases.
 
-For an isolated starter profile in the candidate, use `vrg setup --project /path/to/project --synthetic --text-only --cli-only --non-interactive --yes`. Only its generated `sample.md` is admitted as a source. This command is not available in the published 0.1.1 package.
-
-For the unpublished macOS Intel candidate, text mode does not need ONNX Runtime; semantic mode uses dynamic loading and requires a compatible `libonnxruntime.dylib` beside `vrg`. A compatible library has not yet been distributed or validated, so semantic mode on Intel macOS is not currently certified.
+For a starter profile without real notes, use `setup --project /absolute/path/project --synthetic --text-only --cli-only --non-interactive --yes --offline`; only generated `sample.md` is admitted. Adaptive Memory requires explicit `--adaptive-memory`; see [HOT/WARM/COLD, proposals, budgets and migration](ADAPTIVE_MEMORY.md). MCP stays read-only. Preserve the stable server until the selected profile and rollback are validated.

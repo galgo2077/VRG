@@ -14,40 +14,22 @@ The Phase 4 baseline and local integration were validated on **Void Linux**. The
 
 The semantic model is optional. If no usable model is configured, text search remains available and semantic retrieval is reported as unavailable or degraded. VRG does not implicitly download models. Source-note writing through MCP is disabled.
 
-> **Current published package:** `vrg` 0.1.1 uses the manual configuration documented below. The setup and doctor commands in development are not part of that release.
+## Install VRG 0.5.0 — Linux x86_64
 
-## Install from the F4 source release
-
-The bilingual installation site is available at <https://galgo2077.github.io/VRG/>.
-
-**Published channel:** [v0.4.0-f4 source release](https://github.com/galgo2077/VRG/releases/tag/v0.4.0-f4). The release contains code, tests, Cargo.lock and a verified Linux x86_64 archive. The archive was tested on Void Linux with glibc 2.41; it requires symbols through GLIBC 2.38 and GLIBCXX 3.4.31. [Download the archive](https://github.com/galgo2077/VRG/releases/download/v0.4.0-f4/vrg-v0.4.0-f4-linux-x86_64.tar.gz) and [checksums](https://github.com/galgo2077/VRG/releases/download/v0.4.0-f4/SHA256SUMS.txt). The official [vrg 0.1.1 crate](https://crates.io/crates/vrg/0.1.1) is published under the project owner. Version 0.1.1 was installed and smoke-tested on Void Linux x86_64. The F4 tagged source declares Cargo version **0.1.0**, whereas **v0.4.0-f4** is the Phase 4 milestone tag; later crates.io patches can carry documentation fixes.
-
-Requirements: Git, Rust **1.92+** and Cargo, plus native build tools needed by the locked dependencies. The maintained local validation environment is Void Linux; independent macOS and Windows support is not claimed.
+The [0.5.0 release](https://github.com/galgo2077/VRG/releases/tag/v0.5.0) provides the Linux binary and [checksums](https://github.com/galgo2077/VRG/releases/download/v0.5.0/SHA256SUMS.txt). The [vrg 0.5.0 crate](https://crates.io/crates/vrg/0.5.0) builds from source:
 
 ```sh
-git clone --branch v0.4.0-f4 --depth 1 https://github.com/galgo2077/VRG.git
-cd VRG
-cargo build --release --locked
-test -x target/release/vrg
-./target/release/vrg --help
-```
-
-A first build may download dependencies. Use `cargo build --release --locked --offline` only when all locked packages are already cached.
-
-**Next, test with a synthetic Markdown root before authorizing any private vaults.** The [complete English installation and verification guide](docs/public/SETUP.md), [guía en español](docs/public/SETUP.es.md), [web setup walkthrough](docs/setup.html) and [operator guide](docs/PUBLIC_INSTALL.md) cover isolated configuration, indexing, text and semantic retrieval, read-only MCP, Codex hook trust, continuity, troubleshooting, and directed F4 checks.
-
-A tagged Git-source Cargo install is also possible in principle (`cargo install --git https://github.com/galgo2077/VRG.git --tag v0.4.0-f4 --locked`), but it has not been certified on a fresh external environment. It compiles locally; it is **not** a binary download.
-
-The official crates.io package can also be installed from source. Version `0.1.1` was tested with an empty installation root and a separate build target on Void Linux x86_64:
-
-```sh
-cargo install vrg --locked
+cargo install vrg --version 0.5.0 --locked
 vrg --version
+vrg setup --help
+vrg doctor --help
 ```
 
-## Setup and doctor under development
+Cargo installation may download locked dependencies and the native ONNX Runtime. A prepared source checkout builds with `cargo build --release --locked --offline`; see the [English guide](docs/public/SETUP.md) or [guía en español](docs/public/SETUP.es.md) for explicit native-cache preparation and synthetic setup. Rust 1.92+ is declared; validation used Rust 1.98 on Void Linux x86_64.
 
-The next release is being developed with `vrg setup` and `vrg doctor`; these commands are **not available in the published 0.1.1 crate or the F4 binary**. Their behavior and release remain subject to validation. The current installation instructions above still apply. Candidate syntax, authorization boundaries and recovery are described in the [English guide](docs/public/SETUP.md#candidate-workflow-development-builds-only) and [guía en español](docs/public/SETUP.es.md#flujo-candidato-solo-compilaciones-de-desarrollo).
+Setup produces a reviewable plan; doctor is passive by default. Adaptive Memory is an explicit project opt-in: HOT/WARM/COLD proposals, attributed derived previews, bounded retrieval, immutable deduplicated payloads, lossless archival and protected maintenance. Sources remain intact. Existing stores use [offline-copy migration and rollback](docs/public/ADAPTIVE_MEMORY.md#existing-stores-and-rollback), without replacing a running stable store.
+
+The independent [v0.4.0-f4 baseline](https://github.com/galgo2077/VRG/releases/tag/v0.4.0-f4) and its certification remain unchanged. Adaptive Memory validation is recorded separately in [the release report](docs/public/ADAPTIVE_RELEASE_0.5.0.md).
 
 ## Assistant compatibility and support
 

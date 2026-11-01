@@ -1,10 +1,10 @@
 # VRG — Instalar, configurar y comprobar
 
-> **Estado (1 de noviembre de 2026).** [`v0.4.0-f4`](https://github.com/galgo2077/VRG/releases/tag/v0.4.0-f4) es un **release de código fuente**: contiene Rust y `Cargo.lock`, y un **binario Linux x86_64** verificado en Void Linux (glibc 2.41). El paquete oficial [vrg 0.1.1](https://crates.io/crates/vrg/0.1.1) está publicado bajo el propietario del proyecto; la versión 0.1.1 se instaló y comprobó en Void Linux x86_64. El tag identifica el hito F4; el código del tag F4 declara `0.1.0`. macOS y Windows no están certificados.
+> **Guía de la versión 0.5.0 — Linux x86_64 y Codex.** Las comprobaciones de distribución y artefactos públicos se registran en el [release](https://github.com/galgo2077/VRG/releases/tag/v0.5.0). La versión incorpora `setup`, `doctor` y memoria adaptativa opt-in.
 
-> **Paquete publicado 0.1.1:** la configuración es manual; esta versión no incluye los comandos automáticos `setup` y `doctor`.
+El [tag histórico v0.4.0-f4](https://github.com/galgo2077/VRG/releases/tag/v0.4.0-f4) permanece intacto; sus certificaciones no se repiten ni se transfieren a esta versión. macOS y Windows quedan fuera de este alcance.
 
-[Guía web](../es/setup.html) · [English](SETUP.md) · [Manual avanzado](../PUBLIC_INSTALL.md) · [GitHub](https://github.com/galgo2077/VRG)
+[Guía web](../es/setup.html) · [English](SETUP.md) · [Memoria adaptativa](ADAPTIVE_MEMORY.es.md) · [Manual avanzado](../PUBLIC_INSTALL.md)
 
 ## 1. Requisitos
 
@@ -24,53 +24,48 @@ pkg-config --version
 
 En Void Linux puedes consultar nombres de paquetes mediante `xbps-query -Rs`; no supongas que un comando de instalación se aplica a todas las distribuciones.
 
-## 2. Descargar y compilar (DISPONIBLE)
+## 2. Descargar o compilar 0.5.0
 
-**Binario Linux x86_64:** probado en Void Linux; requiere símbolos GLIBC 2.38 y GLIBCXX 3.4.31. SHA-256: `4c5c6c5432e6f6c3d89d6e50498379a9b3c4f6617f71a7e7da32aec47fbc3c52`.
+**Binario Linux x86_64 0.5.0:** comprueba `SHA256SUMS.txt` antes de extraer. SHA-256 del paquete: `f16a22c34baef663d5b2baec49f05810bf7bdde8bb480f5e9d081dce20426ba6`. Requisitos medidos: GLIBC 2.39, GLIBCXX 3.4.31 y CXXABI 1.3.11; host validado glibc 2.41.
 
 ```sh
 VRG_DOWNLOAD_DIR="$(mktemp -d /tmp/vrg-download.XXXXXXXX)" || exit 1
 ( cd "$VRG_DOWNLOAD_DIR" &&
-  curl -fLO https://github.com/galgo2077/VRG/releases/download/v0.4.0-f4/vrg-v0.4.0-f4-linux-x86_64.tar.gz &&
-  curl -fLO https://github.com/galgo2077/VRG/releases/download/v0.4.0-f4/SHA256SUMS.txt &&
+  curl -fLO https://github.com/galgo2077/VRG/releases/download/v0.5.0/vrg-v0.5.0-linux-x86_64.tar.gz &&
+  curl -fLO https://github.com/galgo2077/VRG/releases/download/v0.5.0/SHA256SUMS.txt &&
   sha256sum -c SHA256SUMS.txt &&
-  tar -xzf vrg-v0.4.0-f4-linux-x86_64.tar.gz &&
-  ./vrg-v0.4.0-f4-linux-x86_64/vrg --help )
+  tar -xzf vrg-v0.5.0-linux-x86_64.tar.gz &&
+  ./vrg-v0.5.0-linux-x86_64/vrg --help )
 ```
 
 
 
 ```sh
-git clone --branch v0.4.0-f4 --depth 1 https://github.com/galgo2077/VRG.git
+git clone --branch v0.5.0 --depth 1 https://github.com/galgo2077/VRG.git
 cd VRG
-cargo build --release --locked
+ORT_LIB_LOCATION=/ruta/absoluta/onnxruntime-verificado ORT_OFFLINE=1 \
+  CARGO_NET_OFFLINE=true cargo build --release --locked --offline
 test -x target/release/vrg
 ./target/release/vrg --help
 ```
 
-El grafo fijado para Linux declara Rust 1.92 como mínimo máximo; la compilación registrada usó Rust 1.98. El build de `ort-sys` puede descargar por separado ONNX Runtime nativo si no está en caché, incluso con Cargo offline. La compilación registrada reutilizó esa caché.
+La compilación requiere Rust 1.92+; el candidato usa Rust 1.98. Prepara por separado las dependencias exactas de `Cargo.lock` y la biblioteca nativa ONNX Runtime 1.31.0. `--offline` no instala dependencias faltantes. La preparación reproducible está en [el workflow Linux](https://github.com/galgo2077/VRG/blob/v0.5.0/.github/workflows/adaptive-linux-release.yml), con distribución nativa y avisos MIT/terceros fijados por hash.
 
-La primera compilación puede necesitar red para descargar las dependencias fijadas. Cuando ya están en caché se puede ejecutar:
+Con la biblioteca verificada en un directorio propio, compila sin red:
 
 ```sh
-cargo build --release --locked --offline
+ORT_LIB_LOCATION=/ruta/absoluta/onnxruntime-verificado ORT_OFFLINE=1 \
+  CARGO_NET_OFFLINE=true cargo build --release --locked --offline
 ```
 
-**Alternativa no verificada en una instalación externa limpia:**
+**Alternativa crates.io, cuando 0.5.0 esté publicada:**
 
 ```sh
-cargo install --git https://github.com/galgo2077/VRG.git --tag v0.4.0-f4 --locked
-vrg --help
-```
-
-Ese comando **compila desde GitHub**; no descarga un binario ni usa crates.io. Si falla, utiliza la compilación del checkout. El ejecutable puede reportar versión `0.1.0`: el tag `v0.4.0-f4` es la versión del hito del proyecto.
-
-**Alternativa crates.io:** la versión 0.1.1 se instaló en un destino limpio y se comprobó en Void Linux x86_64.
-
-```sh
-cargo install vrg --locked
+cargo install vrg --version 0.5.0 --locked
 vrg --version
 ```
+
+`cargo install` compila localmente; puede descargar crates y el runtime nativo. No descarga el binario oficial ni garantiza funcionar sin red. El archivo Linux ya compilado evita esa preparación de build. No se incluye el modelo E5; solo hace falta para búsqueda semántica.
 
 ## 3. Comprobar con notas sintéticas
 
@@ -136,7 +131,7 @@ El comando real es `vrg --config CONFIG mcp serve`. Abre una sesión nueva de Co
 
 ### Hooks y autodocumentación
 
-Hay un ejemplo Unix en `examples/codex/hooks.json.example` y un supervisor `scripts/vrg_hook_observer.py`. **No se instalan ni confían automáticamente**.
+Hay un ejemplo Unix en `examples/codex/hooks.json.example` y un supervisor `scripts/vrg_hook_observer.py`. Son ejemplos manuales. Setup puede crear recursos de hooks del proyecto; sus definiciones reales requieren revisión y confianza en Codex.
 
 Configura `VRG_HOOK_EXECUTABLE` y `VRG_HOOK_EVIDENCE_DIR` con rutas canónicas privadas y existentes. Revisa las definiciones exactas de `SessionStart`, `UserPromptSubmit` y `Stop` en `/hooks`; confía únicamente lo que hayas aprobado y verifica los eventos reales en otra sesión. El supervisor portable no hereda la certificación del supervisor original.
 
@@ -146,7 +141,7 @@ El MCP es de solo lectura. Codex puede escribir documentación compacta en Markd
 
 | Prueba | Evidencia requerida |
 |---|---|
-| Fuente | Tag `v0.4.0-f4` y revisión correcta |
+| Fuente | Tag `v0.5.0` y revisión correcta |
 | Compilación | Existe `target/release/vrg` y responde `--help` |
 | Configuración | Raíz sintética y almacenamiento aislado |
 | Indexación | `demo.md` se indexa, fuente intacta |
@@ -160,17 +155,7 @@ El MCP es de solo lectura. Codex puede escribir documentación compacta en Markd
 | Memoria | Una segunda sesión recupera documentación sintética |
 | Recuperación | Backup y rollback solo con datos de prueba |
 
-### Pruebas dirigidas del mantenedor
-
-Estos casos pertenecen al código F4 completo. Requieren fixtures y dependencias adecuadas:
-
-```sh
-cargo test --locked --test codex_auto_sync f4_01_private_metadata_and_external_paths_are_excluded -- --exact
-cargo test --locked --features f4-instrumentation --test codex_auto_sync f4_04_concurrent_publication_and_journal_recovery_are_deterministic -- --exact
-cargo test --locked --test codex_auto_sync f4_05_mcp_exposes_read_only_tools_and_enforces_root_boundaries -- --exact
-```
-
-F4-03 necesita `VRG_F4_MODEL_DIR` y un modelo local de hash verificado. Usa `--offline` únicamente cuando todas las dependencias estén en caché. No uses datos reales para escenarios destructivos.
+Las comprobaciones F4 históricas pertenecen a su revisión y entorno originales. No son un paso rutinario de instalación ni una nueva certificación Adaptive Memory.
 
 ## 7. Errores comunes
 
@@ -186,36 +171,26 @@ F4-03 necesita `VRG_F4_MODEL_DIR` y un modelo local de hash verificado. Usa `--o
 | Hook `untrusted` | Revisar confianza en `/hooks` |
 | Semántica no disponible | Buscar solo texto o instalar modelo verificado |
 
-## 8. Estado de distribución
+## 8. Distribución y operación 0.5.0
 
-- **Código fuente:** [release v0.4.0-f4](https://github.com/galgo2077/VRG/releases/tag/v0.4.0-f4).
-- **Binario listo:** Linux x86_64, probado en Void Linux. [Archivo](https://github.com/galgo2077/VRG/releases/download/v0.4.0-f4/vrg-v0.4.0-f4-linux-x86_64.tar.gz) · [SHA256SUMS](https://github.com/galgo2077/VRG/releases/download/v0.4.0-f4/SHA256SUMS.txt). SHA-256: `4c5c6c5432e6f6c3d89d6e50498379a9b3c4f6617f71a7e7da32aec47fbc3c52`. Requiere símbolos GLIBC 2.38 y GLIBCXX 3.4.31; otras distribuciones no están certificadas.
-- **crates.io:** [vrg 0.1.1](https://crates.io/crates/vrg/0.1.1), bajo el propietario del proyecto; la versión 0.1.1 se instaló y comprobó en Void Linux x86_64.
-- **Versión del paquete crates.io:** `0.1.1`; versión Cargo del tag F4: `0.1.0`; tag `v0.4.0-f4` = hito Fase 4.
-- **Sistema validado:** Void Linux y casos locales; macOS/Windows requieren pruebas separadas.
+- [Release y código v0.5.0](https://github.com/galgo2077/VRG/releases/tag/v0.5.0).
+- [Binario Linux x86_64](https://github.com/galgo2077/VRG/releases/download/v0.5.0/vrg-v0.5.0-linux-x86_64.tar.gz) y [SHA256SUMS](https://github.com/galgo2077/VRG/releases/download/v0.5.0/SHA256SUMS.txt).
+- [Paquete vrg 0.5.0](https://crates.io/crates/vrg/0.5.0). Consulta en el release la comprobación de descarga independiente.
 
-Consulta también [manual de operación](../PUBLIC_INSTALL.md).
+### Setup y doctor
 
-## Próximos setup y doctor
-
-`vrg setup` y `vrg doctor` están en desarrollo y **no se incluyen en el paquete publicado 0.1.1 ni en el binario F4**. Usa los pasos manuales de esta guía hasta que se verifique una nueva versión. El candidato está diseñado para exigir raíces explícitas, distinguir búsqueda textual y modelo local, y dejar la confianza de hooks al usuario. La descarga de modelos, los eventos reales de Codex y el ciclo completo de instalación y recuperación aún no están certificados. MCP sigue siendo de solo lectura.
-
-### Flujo candidato (solo compilaciones de desarrollo)
-
-Estos comandos describen el **candidato no publicado ni validado**, no el paquete 0.1.1 ni el binario F4. Compílalo y pruébalo en un entorno aislado antes de depender de él. Ejecuta `vrg setup` en una terminal para elegir opciones y revisar el plan. Para una configuración no interactiva y textual, sustituye las rutas absolutas de proyecto y notas existentes y elige una memoria dedicada dentro del proyecto:
+Ejecuta `vrg setup` para elegir opciones en una terminal. Para un perfil textual de proyecto autorizado, revisa primero la vista previa:
 
 ```sh
-vrg setup --project /ruta/al/proyecto --root /ruta/a/notas-autorizadas \
-  --text-only --codex --allow-remote-context \
-  --memory-dir /ruta/al/proyecto/vrg-memory --non-interactive --yes --offline
-vrg doctor
-vrg doctor --json
+vrg --config /ruta/absoluta/perfil.toml setup \
+  --project /ruta/absoluta/proyecto --root /ruta/absoluta/notas-autorizadas \
+  --data-dir /ruta/absoluta/derivados --text-only --codex --allow-remote-context \
+  --memory-dir /ruta/absoluta/proyecto/vrg-memory --non-interactive --yes --offline --dry-run
+vrg --config /ruta/absoluta/perfil.toml doctor --json
 ```
 
-`--allow-remote-context` autoriza expresamente que el modelo de Codex configurado reciba fragmentos recuperados de las raíces elegidas; si no autorizas esa transferencia, omite Codex y usa `--cli-only`. `--yes` confirma el plan técnico, no la confianza de hooks ni raíces adicionales. `--root` admite varias apariciones y `--data-dir` selecciona derivados fuera de las raíces. `--dry-run` muestra el plan sin aplicarlo ni descargar. `--model-dir` selecciona un modelo local compatible; `--download-model /ruta/al/modelo` expresa consentimiento para descargar. `--offline` prohíbe la descarga por red. La verificación de descarga y carga del modelo está pendiente de validación final.
+Retira `--dry-run` para aplicar únicamente el plan autorizado. `--yes` no concede confianza de hooks. `--allow-remote-context` autoriza recibir los fragmentos en el modelo Codex configurado; usa `--cli-only` si no autorizas esa transferencia. `--root` es repetible. `--model-dir` selecciona un modelo existente; `--download-model` pide descarga explícita y no funciona como descarga nueva con `--offline`.
 
-Si setup crea hooks de proyecto, revisa sus comandos reales en `/hooks` de Codex y apruébalos personalmente si corresponden. La aprobación y la configuración por sí solas no demuestran ejecución. El candidato `vrg doctor --check-runtime` usa un cliente MCP directo y aislado, no una sesión Codex. `vrg doctor --fix --dry-run` presenta reparaciones reconocidas y `vrg doctor --fix` aplica únicamente reparaciones propias admitidas. Ante una transacción interrumpida, `vrg setup --recover /ruta/a/transaccion-privada --dry-run` muestra el plan; repítelo sin `--dry-run` para confirmar de forma interactiva o añade `--yes` para confirmación no interactiva. La recuperación no debe sobrescribir cambios posteriores. Revisa los conflictos sin borrar notas originales ni bases.
+Si se crean hooks, revisa sus comandos en `/hooks` y comprueba eventos reales en una sesión nueva. Doctor es pasivo por defecto; `--check-runtime` usa un cliente MCP aislado, no acredita una sesión Codex. `doctor --fix --dry-run` muestra reparaciones propias reconocidas; `--fix` las aplica sin ampliar permisos. `setup --recover /ruta/absoluta/transaccion --dry-run` prepara recuperación; conflictos posteriores requieren revisión y no justifican borrar notas o bases.
 
-Para un perfil inicial aislado en el candidato, utiliza `vrg setup --project /ruta/al/proyecto --synthetic --text-only --cli-only --non-interactive --yes`. Solo se admite como fuente el archivo generado `sample.md`. Este comando no está disponible en el paquete publicado 0.1.1.
-
-En el candidato no publicado para macOS Intel, el modo textual no necesita ONNX Runtime; el modo semántico lo carga dinámicamente y requiere una biblioteca `libonnxruntime.dylib` compatible junto a `vrg`. Todavía no se ha distribuido ni validado esa biblioteca, por lo que el modo semántico en macOS Intel no está certificado.
+Para empezar sin notas reales, usa `setup --project /ruta/absoluta/proyecto --synthetic --text-only --cli-only --non-interactive --yes --offline`; solo se admite `sample.md`. La memoria adaptativa se activa por elección explícita `--adaptive-memory`; consulta [HOT/WARM/COLD, propuestas, presupuesto y migración](ADAPTIVE_MEMORY.es.md). MCP permanece de solo lectura. No reemplaces el servidor estable antes de validar el perfil y su rollback.

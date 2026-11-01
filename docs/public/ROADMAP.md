@@ -1,19 +1,7 @@
-# VRG roadmap and verification gates
+# Release status and remaining scope
 
-**Published:** [Phase 4 source release v0.4.0-f4](https://github.com/galgo2077/VRG/releases/tag/v0.4.0-f4), Rust implementation, Cargo.lock, tests, documented MCP and portable Unix observer. Local validation has been reported on Void Linux for its recorded cases, not independently reproduced on all installations.
+VRG 0.5.0 delivers Linux x86_64 and Codex Adaptive Memory, setup and doctor. [Release evidence](ADAPTIVE_RELEASE_0.5.0.md) records the scoped validation, measurements and limitations. The historical v0.4.0-f4 tag remains unchanged.
 
-## Current distribution
-- **Build from source:** [English guide](SETUP.md) / [Guía en español](SETUP.es.md).
-- A Linux x86_64 archive is attached to v0.4.0-f4; it was tested on Void Linux only.
-- The official [vrg 0.1.1 crate](https://crates.io/crates/vrg/0.1.1) is published; version 0.1.1 was installed and smoke-tested on Void Linux x86_64.
-- **Version labels:** current crate `0.1.1`, F4 source Cargo `0.1.0`, milestone tag `v0.4.0-f4`. A later semantic-versioned distribution decision is needed.
+Current boundaries: no macOS/Windows certification, no ONNX Intel work in this release, no new inference provider, no implicit source access or source edits. Semantic retrieval requires an explicitly configured compatible local model. A preview is not proof of complete semantic coverage; exact sources remain available. Billed cost, update amortization and persistent warm-server performance require their own evidence before any claim.
 
-## Next validation gates
-1. Reproduce the tagged source build and synthetic smoke test outside the validated Void Linux environment.
-2. Validate the portable Unix hook observer separately from the original Void Linux local G04 evidence.
-3. Verify Linux release artifacts on additional environments before broadening compatibility claims.
-4. Maintain the GitHub Pages deployment and verify future changes.
-5. Assess macOS and Windows support separately; do not imply certification without tests.
-6. Reproduce crates.io installation on additional environments before broadening support claims.
-
-Private vaults, derived SQLite, embeddings, model files, credentials and hook trust state never belong in the public source release.
+Future work requires its own scope and authorization; this roadmap does not activate hooks, roots, migrations or services.

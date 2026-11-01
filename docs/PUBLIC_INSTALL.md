@@ -1,39 +1,32 @@
 # Installation and operation
 
-**Published F4 source channel:** [GitHub v0.4.0-f4](https://github.com/galgo2077/VRG/releases/tag/v0.4.0-f4) contains source, Cargo.lock and a verified Linux x86_64 archive. See the release checksum and platform limits in the setup guides. The official [vrg 0.1.1 crate](https://crates.io/crates/vrg/0.1.1) is published; version 0.1.1 was installed and smoke-tested on Void Linux x86_64. The F4 tagged Cargo package version is 0.1.0; the tag denotes the F4 milestone. For a safe copy-and-paste demo and all checks, use [the complete setup guide](public/SETUP.md) or [the Spanish guide](public/SETUP.es.md).
+**Version 0.5.0 — Linux x86_64 and Codex.** See the [release verification record](https://github.com/galgo2077/VRG/releases/tag/v0.5.0) for artifact checks and measured limits. Use the [English setup guide](public/SETUP.md), [Spanish guide](public/SETUP.es.md) and [Adaptive Memory guide](public/ADAPTIVE_MEMORY.md).
 
-Quick source build (dependencies may need a first-time download):
+The [historical v0.4.0-f4 release](https://github.com/galgo2077/VRG/releases/tag/v0.4.0-f4) remains unchanged. Its recorded certification belongs to its original revision and environment and is not a new certification of 0.5.0.
+
+Once published, the Linux asset is `vrg-v0.5.0-linux-x86_64.tar.gz`, with `SHA256SUMS.txt`, under [v0.5.0](https://github.com/galgo2077/VRG/releases/tag/v0.5.0). Verify checksums before extracting. The crate installation compiles locally and can download crates/native dependencies:
 
 ```sh
-git clone --branch v0.4.0-f4 --depth 1 https://github.com/galgo2077/VRG.git
-cd VRG
-cargo build --release --locked
-./target/release/vrg --help
+cargo install vrg --version 0.5.0 --locked
+vrg --version
 ```
-
-
-These instructions describe a local deployment. Void Linux is the validated environment; other operating systems are not certified. VRG's recorded Phase 4 and integration results apply to the original tested configuration and do not certify a new installation. The portable observer is a separate distribution adaptation and is not itself covered by the recorded G04 validation.
-
-
-> **Current published package:** 0.1.1 requires the manual setup shown below. Automated `setup` and `doctor` commands are not available in that release.
 
 ## Operating-system support
 
-- **Linux:** the steps below describe a source build. Void Linux was used for the recorded local validation; other distributions have not been certified.
-- **macOS:** source builds and the Unix observer are experimental and unverified. If the required Rust toolchain and native dependencies are available, the Unix commands below are a starting point, not an installation guarantee. Validate locally before relying on them.
-- **Windows:** native installation and hook operation are not supported or certified by the current distribution. The observer uses Unix `fcntl`; do not attempt to enable it as a native Windows hook. No Windows installer or validated WSL workflow is supplied.
+This delivery covers Linux x86_64 and Codex. Measured glibc/libstdc++ requirements belong to the actual release build, not every Linux distribution. macOS, Windows and ONNX Intel work are outside this scope.
 
 ## Requirements and build
 
-- Rust 1.92 or newer and Cargo, with the locked dependencies already available for an offline build.
+- Rust 1.92 or newer and Cargo, with exact locked dependencies and verified native ONNX Runtime 1.31.0 prepared separately before an offline build. See the pinned preparation in `.github/workflows/adaptive-linux-release.yml`.
 - A local directory for rebuildable derived state, outside the repository and source roots.
 - At least one explicitly authorized Markdown root if you intend to index notes.
-- Optional local model files for semantic retrieval. VRG supports `intfloat/multilingual-e5-small` as a user-supplied model; it does not fetch it automatically. The model directory must contain `model.onnx`, `tokenizer.json`, `config.json`, `special_tokens_map.json`, and `tokenizer_config.json` as regular files.
+- Optional local model files for semantic retrieval. VRG supports `intfloat/multilingual-e5-small` as a user-supplied model; it does not fetch it automatically; setup can request an explicit verified download with `--download-model`. The model directory must contain `model.onnx`, `tokenizer.json`, `config.json`, `special_tokens_map.json`, and `tokenizer_config.json` as regular files.
 
 From the checkout:
 
 ```sh
-cargo build --offline --locked
+ORT_LIB_LOCATION=/absolute/path/verified-onnxruntime ORT_OFFLINE=1 \
+  CARGO_NET_OFFLINE=true cargo build --offline --locked
 ./target/debug/vrg init
 ./target/debug/vrg status
 ```
@@ -114,10 +107,10 @@ Selective documentation is a decision by the assistant: record only new, verifie
 - **Stale or failed synchronization:** inspect `vrg status`, source permissions and exclusions, and the configured data directory. Do not label a stale generation as current or change roots to work around an error.
 - **Recovery:** derived data is rebuildable, but any rollback or restoration must be scoped to the authorized installation and its documented recovery policy. Never overwrite or clean original vaults or backups as a troubleshooting shortcut.
 
-## Setup and doctor development status
+## Setup, doctor and Adaptive Memory in 0.5.0
 
-The candidate adds `vrg setup` and `vrg doctor`; neither is available in the published 0.1.1 crate or F4 binary. Until a newer release is verified, use the manual instructions above.
+`vrg setup` plans an explicitly authorized profile. Review `--dry-run` before applying it. It distinguishes text-only operation from a local embedding model and requires explicit consent for model downloads and remote Codex context. `vrg doctor` is passive by default; `--check-runtime` adds an isolated direct MCP probe, while `--fix --dry-run` previews only recognized VRG-owned repairs. Neither configuration nor doctor alone establishes hook trust or live Codex event execution.
 
-The planned project-scoped flow requires explicit source roots and separates text-only search from a local model; no model download is available yet. Hook trust remains a separate user decision in Codex. MCP stays read-only and can return excerpts to a remote model when the user has authorized that transfer. A doctor configuration check does not establish a live Codex connection or hook execution.
+Setup and recovery examples are in the [English guide](public/SETUP.md#setup-and-doctor) and [Spanish guide](public/SETUP.es.md#setup-y-doctor). The automatic project flow can create bounded hook resources for review; legacy observer examples above remain manual alternatives and do not replace the packaged supervisor.
 
-Candidate commands and recovery constraints are documented in the [English guide](public/SETUP.md#candidate-workflow-development-builds-only) and [Spanish guide](public/SETUP.es.md#flujo-candidato-solo-compilaciones-de-desarrollo); they remain subject to validation.
+Adaptive Memory defaults to disabled. Choose `--adaptive-memory` explicitly for the reviewed project profile. See [the memory guide](public/ADAPTIVE_MEMORY.md) for strict proposals, derived summaries, complete-response budgets, COLD integrity checks, safe retention and `memory migrate --offline-copy DEST`. Restore returns exact authorized archive data as JSON and never overwrites a source note. No archive or old summary bypasses current source permissions.

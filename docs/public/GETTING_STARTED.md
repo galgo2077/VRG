@@ -1,20 +1,23 @@
 # Getting started
 
-The complete source is published in [VRG F4 v0.4.0-f4](https://github.com/galgo2077/VRG/releases/tag/v0.4.0-f4), and includes a Linux x86_64 archive tested on Void Linux. The official [vrg 0.1.1 crate](https://crates.io/crates/vrg/0.1.1) is published; version 0.1.1 was installed and smoke-tested on Void Linux x86_64.
+VRG 0.5.0 targets Linux x86_64 and Codex, with `setup`, passive `doctor` and opt-in Adaptive Memory. See the [release verification record](https://github.com/galgo2077/VRG/releases/tag/v0.5.0) for artifact checks and measured limits.
 
-- [Full English setup and tests](SETUP.md)
-- [Guía completa en español](SETUP.es.md)
-- [Interactive web guide](../setup.html)
-- [Detailed maintainer/operator manual](../PUBLIC_INSTALL.md)
+- [English installation and operation](SETUP.md)
+- [Guía en español](SETUP.es.md)
+- [Web guide](../setup.html)
+- [Adaptive Memory: HOT/WARM/COLD](ADAPTIVE_MEMORY.md)
+- [Detailed operator guide](../PUBLIC_INSTALL.md)
 - [Privacy and data boundaries](SECURITY.md)
 
-Quick release source build (Rust 1.92+, Cargo, Git; build-time dependencies may require network):
+Download [the Linux archive](https://github.com/galgo2077/VRG/releases/download/v0.5.0/vrg-v0.5.0-linux-x86_64.tar.gz) and verify [SHA256SUMS.txt](https://github.com/galgo2077/VRG/releases/download/v0.5.0/SHA256SUMS.txt) before extraction. The source and crate use the same version, `0.5.0`.
+
+Crates.io installation compiles from source and may download locked dependencies and the native ONNX runtime:
 
 ```sh
-git clone --branch v0.4.0-f4 --depth 1 https://github.com/galgo2077/VRG.git
-cd VRG
-cargo build --release --locked
-./target/release/vrg --help
+cargo install vrg --version 0.5.0 --locked
+vrg --version
 ```
 
-Run isolated synthetic-notes checks **before** allowing any real Markdown roots. F4 source Cargo version `0.1.0`, crates.io version `0.1.1` and milestone tag `v0.4.0-f4` are separate identifiers. Void Linux is the validated local environment; other platforms are not certified.
+For a source build, use the `v0.5.0` tag and prepare exact Cargo/native dependencies explicitly as described in [SETUP](SETUP.md). Rust builds use `--locked --offline`; offline mode cannot supply missing caches.
+
+Start with an isolated synthetic profile before authorizing real notes. Setup requires explicit paths and consent; hook trust remains a separate review in Codex. macOS and Windows are outside this Linux release scope. The historical [v0.4.0-f4](https://github.com/galgo2077/VRG/releases/tag/v0.4.0-f4) tag and its original certification remain intact.
