@@ -18,9 +18,25 @@ jobs:
         run: |
           set -euo pipefail
           test "$(uname -m)" = x86_64
-          run_id=$(gh api 'repos/${{ github.repository }}/actions/runs?branch=ci%2Fonnx-source-20261101&status=success&per_page=20' --jq '[.workflow_runs[] | select(.name == "ONNX Runtime Intel source probe")][0].id')
-          test -n "$run_id" && test "$run_id" != null
-          gh run download "$run_id" --repo '${{ github.repository }}' --name onnxruntime-1.24.1-macos-intel-probe --dir "$RUNNER_TEMP/ort"
+          run_id=41324004614
+          run=$(gh api "repos/${{ github.repository }}/actions/runs/$run_id")
+          test "$(printf '%s' "$run" | jq -r .head_sha)" = ba47f5eaf8360c3cdc0256e718c28da7a8162534
+          test "$(printf '%s' "$run" | jq -r .conclusion)" = success
+          artifact=$(gh api "repos/${{ github.repository }}/actions/runs/$run_id/artifacts" --jq '.artifacts[] | select(.name == "onnxruntime-1.24.1-macos-intel-probe" and .expired == false)')
+          artifact_id=$(printf '%s' "$artifact" | jq -r .id)
+          artifact_digest=$(printf '%s' "$artifact" | jq -r .digest)
+          test -n "$artifact_id" && test "$artifact_digest" != null
+          gh api "repos/${{ github.repository }}/actions/artifacts/$artifact_id/zip" > "$RUNNER_TEMP/ort.zip"
+          test "sha256:$(shasum -a 256 "$RUNNER_TEMP/ort.zip" | awk '{print $1}')" = "$artifact_digest"
+          mkdir -p "$RUNNER_TEMP/ort"
+          python3 - <<'PY'
+          import os, pathlib, zipfile
+          base = pathlib.Path(os.environ['RUNNER_TEMP'])
+          allowed = {'libonnxruntime.dylib', 'LICENSE', 'ThirdPartyNotices.txt', 'BUILD-ENVIRONMENT.txt', 'SHA256.txt'}
+          with zipfile.ZipFile(base / 'ort.zip') as archive:
+              assert set(archive.namelist()) == allowed
+              archive.extractall(base / 'ort')
+          PY
           expected=$(awk '{print $1}' "$RUNNER_TEMP/ort/SHA256.txt")
           actual=$(shasum -a 256 "$RUNNER_TEMP/ort/libonnxruntime.dylib" | awk '{print $1}')
           test "$expected" = "$actual"
