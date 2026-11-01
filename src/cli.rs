@@ -95,6 +95,9 @@ struct SetupArgs {
     /// Explicitly authorized Markdown source directory (repeatable).
     #[arg(long = "root")]
     roots: Vec<PathBuf>,
+    /// Create an isolated sample source within the selected project.
+    #[arg(long, conflicts_with = "roots")]
+    synthetic: bool,
     /// Dedicated derived data directory.
     #[arg(long)]
     data_dir: Option<PathBuf>,
@@ -519,19 +522,29 @@ fn run_setup(explicit_config: Option<PathBuf>, mut args: SetupArgs) -> VrgResult
             ));
         }
     }
-    if args.roots.is_empty() {
+    if args.roots.is_empty() && !args.synthetic {
         if !interactive {
             return Err(VrgError::InvalidConfig(
-                "supply at least one authorized --root".into(),
+                "select --synthetic or supply at least one authorized --root".into(),
             ));
         }
-        let answer = ask("Markdown source directory to authorize (no home-wide discovery): ")?;
-        if answer.is_empty() {
-            return Err(VrgError::InvalidConfig(
-                "an authorized source directory is required".into(),
-            ));
+        if ask("Start with an isolated synthetic sample instead of your notes? [y/N] ")?
+            .eq_ignore_ascii_case("y")
+        {
+            args.synthetic = true;
+        } else {
+            let answer = ask("Markdown source directory to authorize (no home-wide discovery): ")?;
+            if answer.is_empty() {
+                return Err(VrgError::InvalidConfig(
+                    "an authorized source directory is required".into(),
+                ));
+            }
+            args.roots.push(answer.into());
         }
-        args.roots.push(answer.into());
+    }
+    if args.synthetic {
+        let project = absolute(args.project.clone().expect("project checked"))?.canonicalize()?;
+        args.roots.push(project.join(".vrg-synthetic-notes"));
     }
     if args.model_dir.is_none() && args.download_model.is_none() && !args.text_only {
         if !interactive {
@@ -706,6 +719,7 @@ fn run_setup(explicit_config: Option<PathBuf>, mut args: SetupArgs) -> VrgResult
         data_dir: data_dir.clone(),
         model_dir,
         memory_dir,
+        synthetic_root: args.synthetic,
     };
     let plan = crate::setup::plan_setup(&options, extra)?;
     println!(

@@ -54,6 +54,7 @@ pub struct SetupOptions {
     pub data_dir: PathBuf,
     pub model_dir: Option<PathBuf>,
     pub memory_dir: Option<PathBuf>,
+    pub synthetic_root: bool,
 }
 
 fn invalid(message: impl Into<String>) -> VrgError {
@@ -468,9 +469,35 @@ pub fn plan_setup(options: &SetupOptions, mut extra: Vec<PlannedFile>) -> VrgRes
     }
     let mut roots = Vec::new();
     for (i, p) in options.roots.iter().enumerate() {
-        let root = checked_path(p)?.canonicalize()?;
-        if !root.is_dir() {
+        let checked = checked_path(p)?;
+        let sample = options.synthetic_root && checked == project.join(".vrg-synthetic-notes");
+        let root = if sample && !checked.exists() {
+            checked
+        } else {
+            checked.canonicalize()?
+        };
+        if !sample && !root.is_dir() {
             return Err(invalid("source root must be a directory"));
+        }
+        if sample {
+            if root.exists() && !root.is_dir() {
+                return Err(invalid("synthetic source is not a directory"));
+            }
+            let path = root.join("sample.md");
+            let content =
+                b"# Synthetic VRG sample\n\nThis is an isolated example, not a personal note.\n";
+            match current(&path)? {
+                None => extra.push(PlannedFile {
+                    path,
+                    content: content.to_vec(),
+                }),
+                Some(existing) if existing == content => {}
+                Some(_) => {
+                    return Err(VrgError::Conflict(
+                        "existing synthetic sample has been modified".into(),
+                    ));
+                }
+            }
         }
         if roots
             .iter()
@@ -482,7 +509,11 @@ pub fn plan_setup(options: &SetupOptions, mut extra: Vec<PlannedFile>) -> VrgRes
             id: format!("root-{}", i + 1),
             path: root,
             exclusions: vec![],
-            allowed_files: None,
+            allowed_files: if sample {
+                Some(vec!["sample.md".into()])
+            } else {
+                None
+            },
         });
     }
     if let Some(path) = &options.memory_dir {

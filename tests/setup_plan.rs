@@ -28,6 +28,7 @@ fn dry_plan_and_idempotence() {
         data_dir: p.join("data"),
         model_dir: None,
         memory_dir: None,
+        synthetic_root: false,
     };
     let plan = plan_setup(&options, vec![]).unwrap();
     assert_eq!(plan.changes().len(), 1);
@@ -194,5 +195,35 @@ fn external_precondition_change_blocks_application() {
             .is_err()
     );
     assert!(!target.exists());
+    fs::remove_dir_all(p).unwrap();
+}
+
+#[test]
+fn synthetic_profile_is_planned_without_writes_and_admits_only_sample() {
+    let p = fixture();
+    let project = p.join("project");
+    let source = project.join(".vrg-synthetic-notes");
+    let options = SetupOptions {
+        project: project.clone(),
+        roots: vec![source.clone()],
+        config_path: p.join("config/vrg.toml"),
+        data_dir: p.join("data"),
+        model_dir: None,
+        memory_dir: None,
+        synthetic_root: true,
+    };
+    let plan = plan_setup(&options, vec![]).unwrap();
+    assert!(!source.exists());
+    plan.apply(&p.join("backup"), &project, &options.config_path)
+        .unwrap();
+    assert!(source.join("sample.md").is_file());
+    let config = vrg::VrgConfig::load(&options.config_path).unwrap();
+    assert_eq!(
+        config.roots[0].allowed_files.as_ref().unwrap(),
+        &vec!["sample.md".to_owned()]
+    );
+    assert!(plan_setup(&options, vec![]).unwrap().changes().is_empty());
+    fs::write(source.join("sample.md"), b"changed by user").unwrap();
+    assert!(plan_setup(&options, vec![]).is_err());
     fs::remove_dir_all(p).unwrap();
 }
