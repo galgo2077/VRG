@@ -10,16 +10,25 @@ The Phase 4 baseline and local integration were validated on **Void Linux**. The
 
 The semantic model is optional. If no usable model is configured, text search remains available and semantic retrieval is reported as unavailable or degraded. VRG does not implicitly download models. Source-note writing through MCP is disabled.
 
-## Install and use
+## Install from the F4 source release
 
-See [installation and operation](docs/PUBLIC_INSTALL.md) for requirements, a local configuration example, commands, Codex setup, privacy boundaries, and troubleshooting. A source build requires Rust 1.89 or newer and the dependency sources needed by the lockfile. In the validated development environment, builds and tests use Cargo's offline mode:
+**Published channel:** [v0.4.0-f4 source release](https://github.com/galgo2077/VRG/releases/tag/v0.4.0-f4). The release contains code, tests and Cargo.lock but **no prebuilt binary assets**. An official crates.io publication has **not** been verified; do not assume `cargo install vrg` refers to this project. The Rust package declares version **0.1.0**, whereas **v0.4.0-f4** is the Phase 4 milestone tag.
+
+Requirements: Git, Rust **1.89+** and Cargo, plus native build tools needed by the locked dependencies. The maintained local validation environment is Void Linux; independent macOS and Windows support is not claimed.
 
 ```sh
-cargo build --offline --locked
-cargo test --offline --locked
+git clone --branch v0.4.0-f4 --depth 1 https://github.com/galgo2077/VRG.git
+cd VRG
+cargo build --release --locked
+test -x target/release/vrg
+./target/release/vrg --help
 ```
 
-`--offline` requires dependencies and build artifacts already present locally; it does not fetch missing packages. Before indexing, explicitly choose authorized roots and a derived-data directory outside those roots and the repository. Avoid pointing the application at private, secret, or otherwise excluded content.
+A first build may download dependencies. Use `cargo build --release --locked --offline` only when all locked packages are already cached.
+
+**Next, test with a synthetic Markdown root before authorizing any private vaults.** The [complete English installation and verification guide](docs/public/SETUP.md), [guía en español](docs/public/SETUP.es.md), [web setup walkthrough](docs/setup.html) and [operator guide](docs/PUBLIC_INSTALL.md) cover isolated configuration, indexing, text and semantic retrieval, read-only MCP, Codex hook trust, continuity, troubleshooting, and directed F4 checks.
+
+A tagged Git-source Cargo install is also possible in principle (`cargo install --git https://github.com/galgo2077/VRG.git --tag v0.4.0-f4 --locked`), but it has not been certified on a fresh external environment. It compiles locally; it is **not** a binary download.
 
 ## Privacy and operational boundaries
 
