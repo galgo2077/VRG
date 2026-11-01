@@ -26,7 +26,7 @@ En Void Linux puedes consultar nombres de paquetes mediante `xbps-query -Rs`; no
 
 ## 2. Descargar o compilar 0.5.0
 
-**Binario Linux x86_64 0.5.0:** comprueba `SHA256SUMS.txt` antes de extraer. SHA-256 del paquete: `f16a22c34baef663d5b2baec49f05810bf7bdde8bb480f5e9d081dce20426ba6`. Requisitos medidos: GLIBC 2.39, GLIBCXX 3.4.31 y CXXABI 1.3.11; host validado glibc 2.41.
+**Binario Linux x86_64 0.5.0:** comprueba `SHA256SUMS.txt` antes de extraer. SHA-256 del paquete: `55f011dffd88147c3988ad9e2cb11a58faa7da73d0108649262f6ecf3dcc8534`. Requisitos medidos: GLIBC 2.39, GLIBCXX 3.4.31 y CXXABI 1.3.11; host validado glibc 2.41.
 
 ```sh
 VRG_DOWNLOAD_DIR="$(mktemp -d /tmp/vrg-download.XXXXXXXX)" || exit 1

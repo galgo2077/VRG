@@ -21,7 +21,7 @@ AM4 executed 32 distinct directed Cargo cases, the real read-only MCP contract, 
 | AM-G09 | Current/previous/recent, pins, readers, pending journal and summary references protect SQLite/COLD data; stale plans rejected, real unreachable objects reclaimable. |
 | AM-G10 | Explicit consistent offline-copy migration, rollback copy, retries and writer/schema checks. Fault injection is simulated; old noncooperative processes must retain their old store. |
 | AM-G11 | CLI, four core read-only MCP tools, existing optional session tool, setup opt-in and passive doctor. Archive corruption/permission states are explicit. |
-| AM-G12 | Producer wrote a durable decision; fresh retriever recovered its exact revision by MCP; third no-new session left all three authorized notes identical. Scope is that observed cycle. |
+| AM-G12 | Producer wrote a durable decision; fresh retriever recovered its exact revision by MCP; third no-new session left all three authorized notes identical. Scope is that observed cycle; an initial MCP search error was followed by successful attributed retrieval before the work. |
 | AM-G13 | Frozen quality-oracle A/B below; all mandatory facts attributed or expanded, costs and unknowns disclosed. |
 | AM-G14 | Linux package/extraction/install evidence is recorded in the release verification record; no model or personal configuration bundled. |
 | AM-G15 | New version/tag and independently downloadable GitHub/crates.io artifacts; public verification receipts are recorded with the release. |
@@ -51,4 +51,4 @@ ENOSPC and pre/post publication interruption cases use deterministic injected fa
 
 Private source notes, session transcripts, local configurations, derived stores, models, backup files and detailed operational evidence are excluded from this public report and distribution.
 
-Linux artifact SHA-256: `f16a22c34baef663d5b2baec49f05810bf7bdde8bb480f5e9d081dce20426ba6`. Binary SHA-256: `949517b3cc7571ab66b12eb0b12891123b9fb5413ce687b34139f580be03de37`. Measured required symbols: GLIBC2.39, GLIBCXX3.4.31 and CXXABI1.3.11; validated host glibc2.41. ONNX Runtime1.31.0 is statically linked with its matching license and third-party notices included.
+Linux artifact SHA-256: `55f011dffd88147c3988ad9e2cb11a58faa7da73d0108649262f6ecf3dcc8534`. Binary SHA-256: `745fa94e3e5ba25ffe5d25494088734fe6be3aafc558b7c80251871b1a862110`. Measured required symbols: GLIBC2.39, GLIBCXX3.4.31 and CXXABI1.3.11; validated host glibc2.41. ONNX Runtime1.31.0 is statically linked with its matching license and third-party notices included.

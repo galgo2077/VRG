@@ -94,6 +94,7 @@ jobs:
             143764b952fdb1a7c69ce653bfba74a7744d6a8a573bfb73e235fba356c83de3 ONNXRUNTIME-ThirdPartyNotices.txt | sha256sum --check
       - name: Build Linux candidate with offline Cargo and native downloads disabled
         env:
+          RUSTFLAGS: '--remap-path-prefix=/home/runner=/vrg-build'
           CARGO_NET_OFFLINE: 'true'
           ORT_OFFLINE: '1'
         run: cargo +1.98.0 build --release --locked --offline --target x86_64-unknown-linux-gnu

@@ -29,7 +29,7 @@ If a command is missing, install it with your distribution's normal package mana
 
 ## 2. Download or build 0.5.0
 
-**Linux x86_64 binary 0.5.0:** verify `SHA256SUMS.txt` before extracting. Archive SHA-256: `f16a22c34baef663d5b2baec49f05810bf7bdde8bb480f5e9d081dce20426ba6`. Measured symbol requirements: GLIBC 2.39, GLIBCXX 3.4.31 and CXXABI 1.3.11 (validated host glibc 2.41).
+**Linux x86_64 binary 0.5.0:** verify `SHA256SUMS.txt` before extracting. Archive SHA-256: `55f011dffd88147c3988ad9e2cb11a58faa7da73d0108649262f6ecf3dcc8534`. Measured symbol requirements: GLIBC 2.39, GLIBCXX 3.4.31 and CXXABI 1.3.11 (validated host glibc 2.41).
 
 ```sh
 VRG_DOWNLOAD_DIR="$(mktemp -d /tmp/vrg-download.XXXXXXXX)" || exit 1
