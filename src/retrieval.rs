@@ -29,6 +29,18 @@ pub fn retrieve(
     embedder: Option<&LocalEmbedder>,
     request: &SearchRequest,
 ) -> VrgResult<SearchResponse> {
+    retrieve_authorized(store, embedder, request, &|_, _| true)
+}
+
+/// Authorize direct candidates and every graph endpoint before ranking or traversal.
+/// The callback must check the current source policy and exact source revision; a request's
+/// root filter is only a relevance filter. Engine callers recheck results for source races.
+pub fn retrieve_authorized(
+    store: &DerivedStore,
+    embedder: Option<&LocalEmbedder>,
+    request: &SearchRequest,
+    authorize: &dyn Fn(&SourceRef, &str) -> bool,
+) -> VrgResult<SearchResponse> {
     let limit = request.limit.clamp(1, MAX_LIMIT);
     if request.query.trim().is_empty() {
         return Err(VrgError::Search("query must not be empty".into()));
@@ -72,8 +84,23 @@ pub fn retrieve(
             hits: Vec::new(),
         });
     }
+    let revisions: BTreeMap<SourceRef, String> = snapshot
+        .documents
+        .iter()
+        .map(|document| (document.source.clone(), document.revision.clone()))
+        .collect();
+    let allowed = |source: &SourceRef, revision: &str| {
+        root_allowed(source, roots)
+            && revisions
+                .get(source)
+                .is_some_and(|current| current == revision)
+            && authorize(source, revision)
+    };
     let text_candidates =
-        text_search::search(store, &request.query, roots, limit.saturating_mul(4))?;
+        text_search::search(store, &request.query, roots, limit.saturating_mul(4))?
+            .into_iter()
+            .filter(|candidate| allowed(&candidate.chunk.source, &candidate.chunk.revision))
+            .collect();
     let mut ranked = BTreeMap::<String, RankedHit>::new();
     add_text_candidates(&mut ranked, text_candidates);
 
@@ -87,6 +114,7 @@ pub fn retrieve(
             &request.query,
             roots,
             limit.saturating_mul(4),
+            &allowed,
         ) {
             Ok(candidates) if candidates.is_empty() => {
                 semantic_reason = Some(
@@ -112,11 +140,39 @@ pub fn retrieve(
             request.graph_hops.min(2),
             limit,
             roots,
+            &allowed,
         )?;
         ordered.sort_by(rank_order);
     }
 
-    let edges_by_source = group_edges(&snapshot.edges);
+    let selected_sources: BTreeSet<_> = ordered
+        .iter()
+        .take(limit)
+        .map(|entry| &entry.candidate.chunk.source)
+        .collect();
+    let allowed_edges: Vec<GraphEdge> = snapshot
+        .edges
+        .iter()
+        .filter(|edge| {
+            selected_sources.contains(&edge.from)
+                || edge
+                    .to
+                    .as_ref()
+                    .is_some_and(|to| selected_sources.contains(to))
+        })
+        .filter(|edge| {
+            revisions
+                .get(&edge.from)
+                .is_some_and(|revision| allowed(&edge.from, revision))
+                && edge.to.as_ref().is_none_or(|to| {
+                    revisions
+                        .get(to)
+                        .is_some_and(|revision| allowed(to, revision))
+                })
+        })
+        .cloned()
+        .collect();
+    let edges_by_source = group_edges(&allowed_edges);
     let hits = ordered
         .into_iter()
         .take(limit)
@@ -165,6 +221,7 @@ fn semantic_candidates(
     query: &str,
     roots: Option<&[String]>,
     limit: usize,
+    authorize: &dyn Fn(&SourceRef, &str) -> bool,
 ) -> VrgResult<Vec<SearchCandidate>> {
     let embedder = embedder.ok_or_else(|| {
         VrgError::SemanticUnavailable("no local embedding model is configured".into())
@@ -184,6 +241,10 @@ fn semantic_candidates(
             "active generation has incomplete vectors for the configured local model".into(),
         ));
     }
+    let stored_vectors: Vec<_> = stored_vectors
+        .into_iter()
+        .filter(|stored| authorize(&stored.chunk.source, &stored.chunk.revision))
+        .collect();
     let vectors = stored_vectors
         .iter()
         .map(|stored| crate::contracts::VectorEmbedding {
@@ -280,10 +341,22 @@ fn add_graph_expansion(
     max_hops: u8,
     limit: usize,
     roots: Option<&[String]>,
+    authorize: &dyn Fn(&SourceRef, &str) -> bool,
 ) -> VrgResult<()> {
     if max_hops == 0 || limit == 0 {
         return Ok(());
     }
+    let revisions: BTreeMap<_, _> = snapshot
+        .documents
+        .iter()
+        .map(|document| (&document.source, document.revision.as_str()))
+        .collect();
+    let node_allowed = |source: &SourceRef| {
+        root_allowed(source, roots)
+            && revisions
+                .get(source)
+                .is_some_and(|revision| authorize(source, revision))
+    };
     let titles = snapshot
         .documents
         .iter()
@@ -310,12 +383,14 @@ fn add_graph_expansion(
     let mut expanded_count = 0usize;
 
     while let Some((source, depth)) = queue.pop_front() {
-        if depth >= max_hops || expanded_count >= limit {
+        if depth >= max_hops || expanded_count >= limit || !node_allowed(&source) {
             continue;
         }
         let mut adjacent = snapshot
             .edges
             .iter()
+            .filter(|edge| edge.from == source || edge.to.as_ref() == Some(&source))
+            .filter(|edge| node_allowed(&edge.from) && edge.to.as_ref().is_some_and(&node_allowed))
             .filter_map(|edge| {
                 if edge.from == source {
                     edge.to.clone().map(|to| (to, edge.clone()))
@@ -325,7 +400,7 @@ fn add_graph_expansion(
                     None
                 }
             })
-            .filter(|(next, _)| root_allowed(next, roots))
+            .filter(|(next, _)| node_allowed(next))
             .collect::<Vec<_>>();
         adjacent.sort_by(|a, b| a.0.cmp(&b.0));
         adjacent.dedup_by(|a, b| a.0 == b.0);
@@ -344,6 +419,9 @@ fn add_graph_expansion(
             let Some(chunk) = chunks.first() else {
                 continue;
             };
+            if !authorize(&chunk.source, &chunk.revision) {
+                continue;
+            }
             if !known_chunks.insert(chunk.id.clone()) {
                 continue;
             }

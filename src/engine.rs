@@ -558,7 +558,30 @@ impl VrgEngine {
                 .collect(),
             None => authorized,
         });
-        let mut response = retrieval::retrieve(&state.store, state.embedder.as_ref(), &request)?;
+        let access_cache =
+            std::cell::RefCell::new(std::collections::BTreeMap::<SourceRef, Option<String>>::new());
+        let authorize = |source: &SourceRef, revision: &str| {
+            if let Some(current) = access_cache.borrow().get(source) {
+                return current.as_deref() == Some(revision);
+            }
+            let current = vault::read_source(
+                &state.config,
+                &source.root_id,
+                &source.relative_path,
+                4 * 1024 * 1024,
+            )
+            .ok()
+            .map(|doc| doc.revision);
+            let allowed = current.as_deref() == Some(revision);
+            access_cache.borrow_mut().insert(source.clone(), current);
+            allowed
+        };
+        let mut response = retrieval::retrieve_authorized(
+            &state.store,
+            state.embedder.as_ref(),
+            &request,
+            &authorize,
+        )?;
         // Recheck source policy and exact revision even when stale retrieval was requested.
         // Revocation cannot be bypassed through an old index, graph or summary.
         let mut checked = std::collections::BTreeMap::new();

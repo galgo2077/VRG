@@ -423,7 +423,7 @@ fn am_t11_passive_doctor_reports_archive_corruption_without_repair() {
     f.write_config(&config);
     let record = engine.archive_source("fixture", "Private.md").unwrap();
     drop(engine);
-    let manifest_id = record["manifest_id"].as_str().unwrap();
+    let manifest_id = record["object"]["manifest_id"].as_str().unwrap();
     let archive = config
         .data_dir
         .join("cold")

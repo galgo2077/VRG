@@ -330,3 +330,91 @@ fn am_t01_source_identity_has_no_separator_collisions_and_optional_null_is_rejec
     value["operations"][0]["target_tier"] = serde_json::Value::Null;
     assert!(adaptive::parse_proposal(&serde_json::to_vec(&value).unwrap()).is_err());
 }
+
+#[test]
+fn am_t07_graph_does_not_traverse_a_revoked_bridge_or_expose_its_relations() {
+    use vrg::contracts::{
+        GraphEdge, IndexSnapshot, LinkKind, SearchRequest, StoredDocument, TextChunk,
+    };
+    struct Directory(std::path::PathBuf);
+    impl Drop for Directory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let directory =
+        Directory(std::env::temp_dir().join(format!("vrg-am-t07-{}-{nonce}", std::process::id())));
+    std::fs::create_dir_all(&directory.0).unwrap();
+    let path = directory.0.canonicalize().unwrap();
+    let store = vrg::storage::DerivedStore::open(path.join("derived")).unwrap();
+    let mut snapshot = IndexSnapshot {
+        generation_id: "e".repeat(64),
+        documents: Vec::new(),
+        chunks: Vec::new(),
+        edges: Vec::new(),
+        vectors: Vec::new(),
+    };
+    let refs: Vec<_> = ["PublicSeed.md", "RevokedBridge.md", "PublicTarget.md"]
+        .iter()
+        .map(|path| SourceRef {
+            root_id: "synthetic".into(),
+            relative_path: (*path).into(),
+        })
+        .collect();
+    for (index, reference) in refs.iter().enumerate() {
+        let text = if index == 0 {
+            "AM07_SEED source"
+        } else {
+            "Unrelated context"
+        };
+        let revision = hex::encode(Sha256::digest(text.as_bytes()));
+        snapshot.documents.push(StoredDocument {
+            source: reference.clone(),
+            revision: revision.clone(),
+            title: reference.relative_path.clone(),
+            frontmatter: BTreeMap::new(),
+            modified_unix_ms: None,
+        });
+        snapshot.chunks.push(TextChunk {
+            id: format!("chunk-{index}"),
+            source: reference.clone(),
+            revision,
+            ordinal: 0,
+            start_byte: 0,
+            end_byte: text.len() as u32,
+            text: text.into(),
+        });
+    }
+    for index in 0..2 {
+        snapshot.edges.push(GraphEdge {
+            from: refs[index].clone(),
+            to: Some(refs[index + 1].clone()),
+            unresolved_target: None,
+            kind: LinkKind::Wiki,
+            start_byte: 0,
+            end_byte: 1,
+        });
+    }
+    store.commit_generation(snapshot, None).unwrap();
+    let request = SearchRequest {
+        query: "AM07_SEED".into(),
+        limit: 10,
+        root_ids: None,
+        use_semantic: false,
+        graph_hops: 2,
+    };
+    let allowed = vrg::retrieval::retrieve_authorized(&store, None, &request, &|source, _| {
+        source.relative_path != "RevokedBridge.md"
+    })
+    .unwrap();
+    assert_eq!(allowed.hits.len(), 1);
+    assert_eq!(allowed.hits[0].source, refs[0]);
+    assert!(allowed.hits[0].relations.is_empty());
+    // The same graph really can reach both other nodes when the bridge is authorized.
+    let unrestricted = vrg::retrieval::retrieve(&store, None, &request).unwrap();
+    assert_eq!(unrestricted.hits.len(), 3);
+}
