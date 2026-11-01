@@ -33,7 +33,7 @@ EOF
 ./target/release/vrg --config "$DEMO_CFG" index
 ./target/release/vrg --config "$DEMO_CFG" search "brújula zafiro" --root demo --text-only</code></pre>
 <p>Debe devolver un hit atribuido a <code>demo.md</code> y conservar intacta la fuente. No necesitas embeddings para la búsqueda textual. Los escenarios destructivos deben limitarse a este perfil sintético.</p></section>
-<section class="docs-section" id="codex"><p class="kicker">03 / MCP READ-ONLY</p><h2>Conecta Codex.</h2><p>Crea una configuración de proyecto <code>.codex/config.toml</code> con rutas absolutas reales. No pegues estas rutas de ejemplo sin reemplazarlas.</p>
+<section class="docs-section" id="codex"><p class="kicker">03 / MCP READ-ONLY</p><h2>Conecta Codex.</h2><p><strong>Compatibilidad actual:</strong> Codex es el único asistente con integración oficialmente soportada por VRG. No se ha validado soporte para otros asistentes, aunque utilicen MCP. El CLI local funciona sin Codex.</p><p>Crea una configuración de proyecto <code>.codex/config.toml</code> con rutas absolutas reales. No pegues estas rutas de ejemplo sin reemplazarlas.</p>
 <pre class="setup-terminal"><code>[mcp_servers.vrg]
 command = "/ruta/absoluta/VRG/target/release/vrg"
 args = ["--config", "/ruta/absoluta/demo.toml", "mcp", "serve"]

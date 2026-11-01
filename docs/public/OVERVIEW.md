@@ -10,6 +10,14 @@ VRG (Vault RAG Graph) is a Rust-based local-first knowledge system for Markdown 
 4. A read-only MCP adapter enables Codex to search, inspect attributed sources, and navigate relations.
 5. Approved project documentation can be updated selectively by Codex's ordinary file tools, while VRG incrementally indexes changes.
 
+## Assistant compatibility
+
+Currently **Codex is the only officially supported assistant integration**. VRG's local CLI is usable independently. Other MCP clients have not been validated or announced as supported.
+
+## Voluntary support
+
+[Buy Me a Coffee — galgo2077](https://buymeacoffee.com/galgo2077?new=1) is an external donation page supporting VRG maintenance and development. The project remains free and open source; donating is optional.
+
 ## Boundaries
 
 - No implicit access to all of `$HOME`.
