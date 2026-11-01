@@ -1,6 +1,6 @@
 # VRG — Install, configure and verify
 
-> **Release channel (1 November 2026).** [`v0.4.0-f4`](https://github.com/galgo2077/VRG/releases/tag/v0.4.0-f4) is a **source release**, with Rust application code, tests and `Cargo.lock`, plus a verified **Linux x86_64 binary archive** tested on Void Linux (glibc 2.41). The official [vrg 0.1.0 crate](https://crates.io/crates/vrg/0.1.0) is published under the project owner; version 0.1.0 was installed and smoke-tested on Void Linux x86_64. The tag is a **Phase 4 release label**; the F4 tagged source reports Cargo version `0.1.0`. macOS and Windows aren't certified, and the portable Unix hook observer is not the same implementation as the original local G04 verification.
+> **Release channel (1 November 2026).** [`v0.4.0-f4`](https://github.com/galgo2077/VRG/releases/tag/v0.4.0-f4) is a **source release**, with Rust application code, tests and `Cargo.lock`, plus a verified **Linux x86_64 binary archive** tested on Void Linux (glibc 2.41). The official [vrg 0.1.1 crate](https://crates.io/crates/vrg/0.1.1) is published under the project owner; version 0.1.1 was installed and smoke-tested on Void Linux x86_64. The tag is a **Phase 4 release label**; the F4 tagged source reports Cargo version `0.1.0`. macOS and Windows aren't certified, and the portable Unix hook observer is not the same implementation as the original local G04 verification.
 
 [Website setup](../setup.html) · [Español](SETUP.es.md) · [Existing operator guide](../PUBLIC_INSTALL.md) · [Source code](https://github.com/galgo2077/VRG)
 
@@ -68,10 +68,10 @@ vrg --help
 
 That command builds from source; it does **not** download an official binary and is not a crates.io installation. If it fails in your environment, use the clone-and-build procedure and inspect the build error. The package version shown by `--version` can be `0.1.0` even though the tag is `v0.4.0-f4`.
 
-**Crates.io alternative:** version 0.1.0 was installed into a clean destination and smoke-tested on Void Linux x86_64.
+**Crates.io alternative:** version 0.1.1 was installed into a clean destination and smoke-tested on Void Linux x86_64.
 
 ```sh
-cargo install vrg --version 0.1.0 --locked
+cargo install vrg --locked
 vrg --version
 ```
 
@@ -189,8 +189,8 @@ F4-03 requires a verified local model and environment variable `VRG_F4_MODEL_DIR
 
 - **Source:** [v0.4.0-f4 release](https://github.com/galgo2077/VRG/releases/tag/v0.4.0-f4).
 - **Prebuilt release binary:** Linux x86_64, tested on Void Linux. [Archive](https://github.com/galgo2077/VRG/releases/download/v0.4.0-f4/vrg-v0.4.0-f4-linux-x86_64.tar.gz) · [SHA256SUMS](https://github.com/galgo2077/VRG/releases/download/v0.4.0-f4/SHA256SUMS.txt). SHA-256: `4c5c6c5432e6f6c3d89d6e50498379a9b3c4f6617f71a7e7da32aec47fbc3c52`. Requires GLIBC 2.38 and GLIBCXX 3.4.31 symbols; other distributions are not certified.
-- **crates.io package:** [vrg 0.1.0](https://crates.io/crates/vrg/0.1.0), owned by the project owner; version 0.1.0 was installed and smoke-tested on Void Linux x86_64.
-- **Cargo package version:** `0.1.0`. The tag `v0.4.0-f4` identifies the **Phase 4 source milestone**, not the Cargo semver release.
+- **crates.io package:** [vrg 0.1.1](https://crates.io/crates/vrg/0.1.1), owned by the project owner; version 0.1.1 was installed and smoke-tested on Void Linux x86_64.
+- **Crates.io package version:** `0.1.1`; F4 source tag Cargo version: `0.1.0`. The tag `v0.4.0-f4` identifies the **Phase 4 source milestone**, not the Cargo semver release.
 - **Certified OS:** local cases on Void Linux. Do not claim native Windows or macOS support until independently verified.
 
 See [Installation and operation](../PUBLIC_INSTALL.md) for additional owner/operator details and recovery.

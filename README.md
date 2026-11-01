@@ -14,7 +14,7 @@ The semantic model is optional. If no usable model is configured, text search re
 
 The bilingual installation site is available at <https://galgo2077.github.io/VRG/>.
 
-**Published channel:** [v0.4.0-f4 source release](https://github.com/galgo2077/VRG/releases/tag/v0.4.0-f4). The release contains code, tests, Cargo.lock and a verified Linux x86_64 archive. The archive was tested on Void Linux with glibc 2.41; it requires symbols through GLIBC 2.38 and GLIBCXX 3.4.31. [Download the archive](https://github.com/galgo2077/VRG/releases/download/v0.4.0-f4/vrg-v0.4.0-f4-linux-x86_64.tar.gz) and [checksums](https://github.com/galgo2077/VRG/releases/download/v0.4.0-f4/SHA256SUMS.txt). The official [vrg 0.1.0 crate](https://crates.io/crates/vrg/0.1.0) is published under the project owner. Version 0.1.0 was installed and smoke-tested on Void Linux x86_64. The F4 tagged source declares Cargo version **0.1.0**, whereas **v0.4.0-f4** is the Phase 4 milestone tag; later crates.io patches can carry documentation fixes.
+**Published channel:** [v0.4.0-f4 source release](https://github.com/galgo2077/VRG/releases/tag/v0.4.0-f4). The release contains code, tests, Cargo.lock and a verified Linux x86_64 archive. The archive was tested on Void Linux with glibc 2.41; it requires symbols through GLIBC 2.38 and GLIBCXX 3.4.31. [Download the archive](https://github.com/galgo2077/VRG/releases/download/v0.4.0-f4/vrg-v0.4.0-f4-linux-x86_64.tar.gz) and [checksums](https://github.com/galgo2077/VRG/releases/download/v0.4.0-f4/SHA256SUMS.txt). The official [vrg 0.1.1 crate](https://crates.io/crates/vrg/0.1.1) is published under the project owner. Version 0.1.1 was installed and smoke-tested on Void Linux x86_64. The F4 tagged source declares Cargo version **0.1.0**, whereas **v0.4.0-f4** is the Phase 4 milestone tag; later crates.io patches can carry documentation fixes.
 
 Requirements: Git, Rust **1.92+** and Cargo, plus native build tools needed by the locked dependencies. The maintained local validation environment is Void Linux; independent macOS and Windows support is not claimed.
 
@@ -32,10 +32,10 @@ A first build may download dependencies. Use `cargo build --release --locked --o
 
 A tagged Git-source Cargo install is also possible in principle (`cargo install --git https://github.com/galgo2077/VRG.git --tag v0.4.0-f4 --locked`), but it has not been certified on a fresh external environment. It compiles locally; it is **not** a binary download.
 
-The official crates.io package can also be installed from source. Version `0.1.0` was tested with an empty installation root and a separate build target on Void Linux x86_64:
+The official crates.io package can also be installed from source. Version `0.1.1` was tested with an empty installation root and a separate build target on Void Linux x86_64:
 
 ```sh
-cargo install vrg --version 0.1.0 --locked
+cargo install vrg --locked
 vrg --version
 ```
 

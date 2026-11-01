@@ -5,8 +5,8 @@
 ## Current distribution
 - **Build from source:** [English guide](SETUP.md) / [Guía en español](SETUP.es.md).
 - A Linux x86_64 archive is attached to v0.4.0-f4; it was tested on Void Linux only.
-- The official [vrg 0.1.0 crate](https://crates.io/crates/vrg/0.1.0) is published; version 0.1.0 was installed and smoke-tested on Void Linux x86_64.
-- **Version labels:** Cargo `0.1.0`, milestone tag `v0.4.0-f4`. A later semantic-versioned distribution decision is needed.
+- The official [vrg 0.1.1 crate](https://crates.io/crates/vrg/0.1.1) is published; version 0.1.1 was installed and smoke-tested on Void Linux x86_64.
+- **Version labels:** current crate `0.1.1`, F4 source Cargo `0.1.0`, milestone tag `v0.4.0-f4`. A later semantic-versioned distribution decision is needed.
 
 ## Next validation gates
 1. Reproduce the tagged source build and synthetic smoke test outside the validated Void Linux environment.
