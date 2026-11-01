@@ -386,8 +386,9 @@ impl DerivedStore {
     }
 
     pub fn apply_maintenance(&self, plan: &MaintenancePlan) -> VrgResult<MaintenanceReport> {
-        let _gc = named_lock(&self.data_dir, "vrg-gc.lock", true)?;
+        // Match publication and COLD maintenance: sync, then GC, then SQLite.
         let _sync = named_lock(&self.data_dir, SYNC_LOCK_FILE, true)?;
+        let _gc = named_lock(&self.data_dir, "vrg-gc.lock", true)?;
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
