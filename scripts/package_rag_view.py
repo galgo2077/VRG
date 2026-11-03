@@ -55,7 +55,8 @@ manifest=stage/'MANIFEST.json';manifest.write_text(json.dumps({'files':[{'path':
 checksums=stage/'SHA256SUMS';checksums.write_text(''.join(sha(f)+'  '+f.relative_to(stage).as_posix()+'\n' for f in sorted(files)));files.append(checksums)
 for f in files:
  assert f.is_relative_to(stage) and not f.is_symlink()
- assert not re.search(rb'/home/[A-Za-z0-9_.-]+/',f.read_bytes()), ('Personal path',f)
+ # Prebuilt upstream native libraries retain public GitHub runner paths.
+ assert all(prefix == b'/home/runner/' for prefix in re.findall(rb'/home/[A-Za-z0-9_.-]+/',f.read_bytes())), ('Personal path',f)
 # Source archives are generated separately from the exact clean Git commit.
 archive=a.destination/(name+'.tar.gz')
 with archive.open('wb') as output:
