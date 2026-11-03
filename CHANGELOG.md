@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.0 — Project Nuclei
+
+- Native read-only graph viewer with separate canonical project constellations and stable project colors.
+- Deterministic project/folder layout, progressive transfer and GPU LOD using real chunk identities and authorized memberships.
+- Smooth navigation, minimap, project/folder hover, source inspector, search, filters and explicit coverage counters.
+- Shared worktree origins remain navigable without becoming duplicate projects; source registry schema 1/2 checks bind profiles, provenance and the active generation.
+- Portable viewer configuration through XDG paths or an explicit source-registry override; no machine-specific project list is bundled.
+- `vrg graph /absolute/project` opens the native viewer; `vrg view --all` opens the registered collection. `vrg graph ROOT_ID RELATIVE_PATH` remains an indexed-source relation query.
+- Linux x86_64 GitHub distribution, offline release build, notices and checksums. No crates.io publication, model bundle, automatic migration or global installation replacement.
+
 ## 0.5.0 — Adaptive Memory
 
 - Opt-in HOT/WARM/COLD proposals from Codex with strict source revision and access checks.

@@ -31,6 +31,20 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Open the read-only local RAG graph for a registered project or collection.
+    View {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        /// Show every already-authorized registered project.
+        #[arg(long)]
+        all: bool,
+        /// Print the session URL without launching a browser.
+        #[arg(long)]
+        no_open: bool,
+        /// Loopback port; 0 asks the operating system for a free port.
+        #[arg(long, default_value_t = 0)]
+        port: u16,
+    },
     #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
     #[command(name = "__verify-onnx-runtime", hide = true)]
     VerifyOnnxRuntime { path: PathBuf },
@@ -250,9 +264,88 @@ enum MemoryCommand {
     },
 }
 
+// Only the first command-position argument may become a path. Known commands
+// retain priority even when a directory with that name happens to exist.
+fn view_shorthand(mut args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsString> {
+    const RESERVED: &[&str] = &[
+        "view",
+        "setup",
+        "doctor",
+        "init",
+        "status",
+        "index",
+        "codex-stop",
+        "codex-start",
+        "codex-turn",
+        "codex-close",
+        "memory",
+        "rollback",
+        "search",
+        "graph",
+        "mcp",
+        "help",
+        "__verify-onnx-runtime",
+    ];
+    let mut index = 1;
+    while index < args.len() {
+        let arg = args[index].to_string_lossy();
+        if arg == "--config" {
+            index += 2;
+            continue;
+        }
+        if arg.starts_with("--config=") {
+            index += 1;
+            continue;
+        }
+        // Native graph PATH spelling reuses the view command; graph ROOT FILE
+        // retains its existing textual-neighbor grammar.
+        if arg == "graph"
+            && args.get(index + 1).is_some_and(|next| {
+                let text = next.to_string_lossy();
+                Path::new(next).is_absolute()
+                    || text.starts_with("./")
+                    || text.starts_with("../")
+                    || text == "."
+                    || text == "--all"
+            })
+        {
+            args[index] = "view".into();
+            break;
+        }
+        if RESERVED.contains(&arg.as_ref()) || arg.starts_with('-') {
+            break;
+        }
+        let path = Path::new(&args[index]);
+        if path.is_absolute()
+            || arg.starts_with("./")
+            || arg.starts_with("../")
+            || arg.contains('/')
+            || path.is_dir()
+        {
+            args.insert(index, "view".into());
+        }
+        break;
+    }
+    args
+}
+
 pub async fn run() -> VrgResult<()> {
-    let cli = Cli::parse();
+    let cli = Cli::parse_from(view_shorthand(env::args_os().collect()));
     match cli.command {
+        Command::View {
+            path,
+            all,
+            no_open,
+            port,
+        } => {
+            crate::view::run(
+                if all { PathBuf::from("@all") } else { path },
+                cli.config,
+                no_open,
+                port,
+            )
+            .await
+        }
         #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
         Command::VerifyOnnxRuntime { path } => crate::runtime_probe::inspect_api(&path),
         Command::Setup(args) => run_setup(cli.config, args),
@@ -1104,4 +1197,117 @@ fn run_doctor(config: Option<PathBuf>, args: DoctorArgs) -> VrgResult<()> {
         std::process::exit(code);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod view_parser_tests {
+    use super::*;
+    fn parse(args: &[&str]) -> Result<Cli, clap::Error> {
+        Cli::try_parse_from(view_shorthand(
+            args.iter().map(std::ffi::OsString::from).collect(),
+        ))
+    }
+    #[test]
+    fn paths_alias_config_and_unicode() {
+        for args in [
+            vec!["vrg", "/ruta/con espacios/árbol", "--no-open"],
+            vec!["vrg", "./status", "--no-open"],
+            vec!["vrg", "../proyecto", "--no-open"],
+            vec!["vrg", "view", "--no-open", "--", "/ruta/-carpeta"],
+            vec!["vrg", "--config", "/perfil con espacios.toml", "/ruta"],
+            vec![
+                "vrg",
+                "--config=/perfil.toml",
+                "view",
+                "/ruta",
+                "--port",
+                "0",
+            ],
+            vec!["vrg", "/home/vrg-database"],
+            vec!["vrg", "graph", "/absolute/project", "--no-open"],
+            vec!["vrg", "graph", "./project", "--no-open"],
+            vec!["vrg", "view", "--all", "--no-open"],
+            vec!["vrg", "graph", "--all", "--no-open"],
+        ] {
+            assert!(
+                matches!(parse(&args).unwrap().command, Command::View { .. }),
+                "{args:?}"
+            );
+        }
+        let cli = parse(&[
+            "vrg",
+            "view",
+            "árbol con espacios",
+            "--no-open",
+            "--port",
+            "1234",
+            "--config",
+            "/p.toml",
+        ])
+        .unwrap();
+        assert_eq!(cli.config, Some(PathBuf::from("/p.toml")));
+        match cli.command {
+            Command::View {
+                path,
+                no_open,
+                port,
+                ..
+            } => {
+                assert_eq!(path, PathBuf::from("árbol con espacios"));
+                assert!(no_open);
+                assert_eq!(port, 1234);
+            }
+            _ => panic!("view expected"),
+        }
+    }
+    #[test]
+    fn inherited_grammar_keeps_priority() {
+        for args in [
+            vec!["vrg", "status"],
+            vec![
+                "vrg",
+                "setup",
+                "--project",
+                "/project",
+                "--text-only",
+                "--cli-only",
+                "--dry-run",
+            ],
+            vec!["vrg", "doctor", "--json"],
+            vec!["vrg", "graph", "root", "note.md"],
+            vec!["vrg", "memory", "status"],
+            vec!["vrg", "memory", "plan"],
+            vec!["vrg", "mcp", "serve"],
+            vec!["vrg", "codex-start"],
+            vec!["vrg", "codex-stop"],
+            vec!["vrg", "codex-turn"],
+            vec![
+                "vrg",
+                "codex-close",
+                "--token",
+                "bounded",
+                "--result",
+                "no-new",
+                "--reason",
+                "no-change",
+            ],
+        ] {
+            assert!(
+                !matches!(parse(&args).unwrap().command, Command::View { .. }),
+                "{args:?}"
+            );
+        }
+        assert!(parse(&["vrg"]).is_err());
+        assert!(parse(&["vrg", "unknown-command-that-is-not-a-path"]).is_err());
+        assert!(parse(&["vrg", "view", "/ruta", "--port", "65536"]).is_err());
+        assert!(parse(&["vrg", "view", "/ruta", "--host", "0.0.0.0"]).is_err());
+        assert_eq!(
+            parse(&["vrg", "--help"]).unwrap_err().kind(),
+            clap::error::ErrorKind::DisplayHelp
+        );
+        assert_eq!(
+            parse(&["vrg", "--version"]).unwrap_err().kind(),
+            clap::error::ErrorKind::DisplayVersion
+        );
+    }
 }

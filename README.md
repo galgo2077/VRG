@@ -14,22 +14,37 @@ The Phase 4 baseline and local integration were validated on **Void Linux**. The
 
 The semantic model is optional. If no usable model is configured, text search remains available and semantic retrieval is reported as unavailable or degraded. VRG does not implicitly download models. Source-note writing through MCP is disabled.
 
-## Install VRG 0.5.0 — Linux x86_64
+## VRG 0.6.0 — Project Nuclei
 
-The [0.5.0 release](https://github.com/galgo2077/VRG/releases/tag/v0.5.0) provides the Linux binary and [checksums](https://github.com/galgo2077/VRG/releases/download/v0.5.0/SHA256SUMS.txt). The [vrg 0.5.0 crate](https://crates.io/crates/vrg/0.5.0) builds from source:
+The read-only local viewer presents registered projects as separate, consistently colored constellations. Explore real folders and chunks with smooth zoom, pan, a minimap, search, filters and a collapsible source inspector. The layout is deterministic and independent of the viewport. LOD draws subsets of real points while retaining every authorized loaded chunk; indexed, authorized, excluded, resident and drawn quantities remain distinct.
 
 ```sh
-cargo install vrg --version 0.5.0 --locked
+vrg graph /absolute/path/to/registered-project
+vrg view --all
+# Existing indexed-source graph queries retain their original syntax:
+vrg graph root-id note.md
+```
+
+The viewer serves embedded assets on loopback, works offline and does not index, infer embeddings, edit notes or change hook trust. The session URL contains a temporary access secret; keep it private. [Viewer operation and permissions](docs/public/PROJECT_NUCLEI.md).
+
+## Install — Linux x86_64
+
+Use the [0.6.0 GitHub release](https://github.com/galgo2077/VRG/releases/tag/v0.6.0) and verify its `SHA256SUMS.txt` before extraction. Follow the archive's installation and runtime requirements. Keep the previous executable and profiles for rollback.
+
+```sh
 vrg --version
 vrg setup --help
 vrg doctor --help
+vrg view --help
 ```
 
-Cargo installation may download locked dependencies and the native ONNX Runtime. A prepared source checkout builds with `cargo build --release --locked --offline`; see the [English guide](docs/public/SETUP.md) or [guía en español](docs/public/SETUP.es.md) for explicit native-cache preparation and synthetic setup. Rust 1.92+ is declared; validation used Rust 1.98 on Void Linux x86_64.
+This release is distributed through GitHub. **Version 0.6.0 is not published to crates.io as part of this release.** The [0.5.0 crate](https://crates.io/crates/vrg/0.5.0) remains a separate published version; installing it does not install Project Nuclei.
 
-Setup produces a reviewable plan; doctor is passive by default. Adaptive Memory is an explicit project opt-in: HOT/WARM/COLD proposals, attributed derived previews, bounded retrieval, immutable deduplicated payloads, lossless archival and protected maintenance. Sources remain intact. Existing stores use [offline-copy migration and rollback](docs/public/ADAPTIVE_MEMORY.md#existing-stores-and-rollback), without replacing a running stable store.
+A prepared source checkout builds with `cargo build --release --locked --offline`. Rust 1.92+ is declared; release builds use the pinned toolchain and pre-existing locked/native caches described by the [release protocol](docs/RELEASE_PROTOCOL.md). Offline builds cannot obtain missing dependencies or native libraries. The [English setup guide](docs/public/SETUP.md) and [guía en español](docs/public/SETUP.es.md) retain their explicitly versioned 0.5.0 instructions.
 
-The independent [v0.4.0-f4 baseline](https://github.com/galgo2077/VRG/releases/tag/v0.4.0-f4) and its certification remain unchanged. Adaptive Memory validation is recorded separately in [the release report](docs/public/ADAPTIVE_RELEASE_0.5.0.md).
+Setup produces a reviewable plan; doctor is passive by default. Adaptive Memory remains an explicit project opt-in. Existing stores use [offline-copy migration and rollback](docs/public/ADAPTIVE_MEMORY.md#existing-stores-and-rollback), without replacing a running stable store. Opening the viewer requires an existing authorized profile and derived index; it never runs setup or migration on your behalf.
+
+The independent [v0.4.0-f4 baseline](https://github.com/galgo2077/VRG/releases/tag/v0.4.0-f4) and [0.5.0 Adaptive Memory release](docs/public/ADAPTIVE_RELEASE_0.5.0.md) remain unchanged. Their historical certifications are not transferred to another package or installation.
 
 ## Assistant compatibility and support
 

@@ -19,6 +19,10 @@ pub mod setup_codex;
 pub mod storage;
 pub mod text_search;
 pub mod vault;
+pub mod view;
+pub mod view_data;
+pub mod view_semantic;
+pub mod view_sources;
 
 mod engine;
 #[cfg(test)]

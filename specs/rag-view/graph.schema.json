@@ -1,0 +1,442 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:vrg:rag-view:graph:v1",
+  "title": "Contrato NUEVO del visor; ejemplos sintéticos no son evidencia de ejecución",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "api_version",
+    "project_id",
+    "snapshot_id",
+    "generation_id",
+    "policy_fingerprint",
+    "sync_state",
+    "capabilities",
+    "coverage",
+    "projection",
+    "nodes",
+    "edges",
+    "next_cursor",
+    "warnings"
+  ],
+  "properties": {
+    "api_version": {
+      "const": "rag-view-v1"
+    },
+    "project_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "snapshot_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "generation_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "policy_fingerprint": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sync_state": {
+      "enum": [
+        "ready",
+        "stale",
+        "sync_pending",
+        "degraded",
+        "error"
+      ]
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "structure",
+        "semantic_vectors",
+        "archive",
+        "read_only"
+      ],
+      "properties": {
+        "structure": {
+          "type": "boolean"
+        },
+        "semantic_vectors": {
+          "type": "boolean"
+        },
+        "archive": {
+          "type": "boolean"
+        },
+        "read_only": {
+          "const": true
+        }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "nodes_returned",
+        "nodes_total_authorized",
+        "edges_returned",
+        "partial",
+        "selection",
+        "semantic_candidate_count"
+      ],
+      "properties": {
+        "nodes_returned": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "nodes_total_authorized": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "edges_returned": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "partial": {
+          "type": "boolean"
+        },
+        "selection": {
+          "enum": [
+            "all_authorized",
+            "filtered",
+            "neighbor_subset",
+            "page",
+            "search_results"
+          ]
+        },
+        "semantic_candidate_count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "projection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "method",
+        "model_identity",
+        "approximate",
+        "note"
+      ],
+      "properties": {
+        "method": {
+          "enum": [
+            "structural",
+            "pca_2d",
+            "unavailable"
+          ]
+        },
+        "model_identity": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "approximate": {
+          "type": "boolean"
+        },
+        "note": {
+          "type": "string"
+        }
+      }
+    },
+    "nodes": {
+      "type": "array",
+      "maxItems": 2000,
+      "items": {
+        "$ref": "#/$defs/node"
+      }
+    },
+    "edges": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": {
+        "$ref": "#/$defs/edge"
+      }
+    },
+    "next_cursor": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "root_id",
+        "relative_path",
+        "revision",
+        "offset_basis"
+      ],
+      "properties": {
+        "root_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "relative_path": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+"
+        },
+        "revision": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "offset_basis": {
+          "enum": [
+            "body_text_utf8",
+            "raw_markdown_utf8",
+            "none"
+          ]
+        },
+        "start_byte": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "end_byte": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        }
+      }
+    },
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "label",
+        "source",
+        "tier",
+        "tier_origin",
+        "content_kind",
+        "position",
+        "revision_state"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "enum": [
+            "chunk",
+            "document",
+            "summary",
+            "source_revision"
+          ]
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "source": {
+          "$ref": "#/$defs/source"
+        },
+        "tier": {
+          "enum": [
+            "HOT",
+            "WARM",
+            "COLD",
+            "unclassified"
+          ]
+        },
+        "tier_origin": {
+          "enum": [
+            "direct",
+            "inherited_from_source",
+            "none"
+          ]
+        },
+        "content_kind": {
+          "enum": [
+            "exact_chunk",
+            "source_metadata",
+            "derived_summary",
+            "archive_revision"
+          ]
+        },
+        "preview": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 160
+        },
+        "chunk_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "needs_expansion": {
+          "type": "boolean"
+        },
+        "position": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "x",
+                "y"
+              ],
+              "properties": {
+                "x": {
+                  "type": "number"
+                },
+                "y": {
+                  "type": "number"
+                }
+              }
+            }
+          ]
+        },
+        "revision_state": {
+          "enum": [
+            "current",
+            "historical"
+          ]
+        }
+      }
+    },
+    "edge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "source",
+        "target",
+        "kind",
+        "score",
+        "provenance_scope"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "target": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "enum": [
+            "contains",
+            "explicit",
+            "semantic_similarity",
+            "derived_from"
+          ]
+        },
+        "score": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": -1,
+          "maximum": 1
+        },
+        "provenance_scope": {
+          "enum": [
+            "document",
+            "chunk",
+            "summary",
+            "computed"
+          ]
+        },
+        "model_identity": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "original_link_kind": {
+          "enum": [
+            "wiki",
+            "embed",
+            "markdown",
+            null
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "semantic_similarity"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "model_identity"
+            ],
+            "properties": {
+              "score": {
+                "type": "number"
+              },
+              "model_identity": {
+                "type": "string",
+                "minLength": 1
+              },
+              "provenance_scope": {
+                "const": "computed"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "score": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

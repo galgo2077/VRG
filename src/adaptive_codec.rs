@@ -274,6 +274,60 @@ impl ArchiveStore {
         ))
     }
 
+    /// Passive viewer access: never creates directories, leases or changes permissions.
+    #[cfg(unix)]
+    pub fn open_existing(store: &Path) -> VrgResult<Self> {
+        use rustix::fs::{Mode, OFlags, openat};
+        let root = open_canonical_directory(store)?;
+        let dir = File::from(
+            openat(
+                &root,
+                "cold",
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .map_err(io_error)?,
+        );
+        Ok(Self { dir })
+    }
+
+    #[cfg(not(unix))]
+    pub fn open_existing(_store: &Path) -> VrgResult<Self> {
+        Err(invalid("passive archive unavailable on this platform"))
+    }
+
+    /// Bounded membership metadata only; payloads are not decompressed.
+    pub fn records_existing(&self, max_entries: usize) -> VrgResult<Vec<ArchiveRecord>> {
+        if max_entries == 0 || max_entries > 4096 {
+            return Err(invalid("archive metadata limit"));
+        }
+        let _lease = self.reader_lease()?;
+        let directory = cap_std::fs::Dir::from_std_file(self.dir.try_clone()?);
+        let mut records = Vec::new();
+        for (index, entry) in directory.entries()?.enumerate() {
+            if index >= max_entries {
+                return Err(invalid("archive catalog exceeds limit"));
+            }
+            let name = entry?.file_name();
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            let Some(id) = name.strip_suffix(".arc").filter(|id| valid_hash(id)) else {
+                continue;
+            };
+            let record: ArchiveRecord =
+                serde_json::from_slice(&self.read_file(name, MAX_MANIFEST_BYTES)?)
+                    .map_err(|_| invalid("invalid archive membership manifest"))?;
+            validate_record(&record)?;
+            if record.manifest_id != id {
+                return Err(invalid("archive manifest filename mismatch"));
+            }
+            records.push(record);
+        }
+        records.sort_by(|a, b| a.manifest_id.cmp(&b.manifest_id));
+        Ok(records)
+    }
+
     pub fn archive(
         &self,
         scope: &str,
@@ -394,6 +448,20 @@ impl ArchiveStore {
     }
 
     pub fn restore(&self, scope: &str, source_id: &str, revision: &str) -> VrgResult<Vec<u8>> {
+        self.restore_bounded(scope, source_id, revision, MAX_OBJECT_BYTES)
+    }
+
+    /// Viewer restoration imposes a stricter expansion bound before decompression.
+    pub fn restore_bounded(
+        &self,
+        scope: &str,
+        source_id: &str,
+        revision: &str,
+        max_raw: usize,
+    ) -> VrgResult<Vec<u8>> {
+        if max_raw > MAX_OBJECT_BYTES {
+            return Err(invalid("invalid archive read limit"));
+        }
         let _lease = self.reader_lease()?;
         validate_identity(scope, source_id, revision)?;
         let manifest_id = archive_id(scope, source_id, revision);
@@ -411,7 +479,10 @@ impl ArchiveStore {
             return Err(invalid("archive source membership mismatch"));
         }
         let bytes = self.read_file(&format!("{}.blob", record.object_id), MAX_BLOB_BYTES)?;
-        let (blob, raw) = decode_blob(&bytes, MAX_OBJECT_BYTES)?;
+        if record.raw_len > max_raw as u64 {
+            return Err(invalid("archive expansion limit"));
+        }
+        let (blob, raw) = decode_blob(&bytes, max_raw)?;
         if !manifest_matches_blob(&record, &blob)
             || record.stored_bytes != (manifest.len() + bytes.len()) as u64
         {

@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>VRG · Project Nuclei</title>
+  <link rel="stylesheet" href="/assets/style.css">
+  <script src="/assets/nuclei.js" defer></script>
+  <script src="/assets/app.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#node-list" data-i18n="skip">Ir a lista accesible</a>
+  <header>
+    <div class="brand"><strong>VRG</strong><span class="brand-divider" aria-hidden="true"></span><span data-i18n="title">Explorador RAG</span><span class="brand-edition">PROJECT NUCLEI</span></div>
+    <span class="badge" data-i18n="readonly">LOCAL · SOLO LECTURA</span>
+    <div class="header-actions"><button id="refresh" data-i18n="refresh" disabled>Actualizar</button><label class="language"><span data-i18n="language">Idioma</span><select id="language" aria-label="Idioma / Language"><option value="es">ES</option><option value="en">EN</option></select></label></div>
+  </header>
+  <div id="notice" role="status" aria-live="polite" hidden></div>
+  <div id="error" role="alert" hidden></div>
+  <main>
+    <aside class="controls" aria-label="Proyectos y filtros">
+      <span class="eyebrow">KNOWLEDGE ATLAS</span><h1 data-i18n="scope">Ámbito autorizado</h1>
+      <label><span data-i18n="project">Proyecto</span><select id="projects" disabled><option value="" data-i18n="choose">Selecciona un proyecto</option></select></label>
+      <p id="mapping" class="muted"></p>
+      <section id="project-controls" hidden>
+        <label><span data-i18n="search">Buscar texto, título o ruta</span><input type="search" id="search" maxlength="1024" autocomplete="off"></label>
+        <details class="layout-controls" open><summary data-i18n="nucleiLayout">Distribución de núcleos</summary><label><span data-i18n="nucleusSeparation">Separación entre proyectos</span><input id="nucleus-separation" type="range" min="0.8" max="2" step="0.05" value="1.2"><span class="range-ends" aria-hidden="true"><span data-i18n="compact">Compacta</span><span data-i18n="wide">Amplia</span></span></label><label><span data-i18n="nucleusDensity">Densidad interna</span><input id="nucleus-density" type="range" min="0.65" max="1.6" step="0.05" value="1"><span class="range-ends" aria-hidden="true"><span data-i18n="loose">Dispersa</span><span data-i18n="dense">Densa</span></span></label></details>
+        <h2 data-i18n="tree">Proyectos y carpetas</h2><button id="all-scope" data-i18n="allScope">Volver a todos</button><p class="muted">Ctrl / ⌘ / Shift + clic: selección múltiple</p><div id="scope-tree" class="scope-tree" role="tree" aria-label="Proyectos, carpetas, archivos y chunks"></div><h2 data-i18n="filters">Filtros de todos los chunks cargados</h2>
+        <label hidden><span data-i18n="root">Raíz</span><select id="root-filter"><option value="" data-i18n="all">Todas</option></select></label>
+        <label hidden><span data-i18n="document">Documento</span><select id="document-filter"><option value="" data-i18n="all">Todos</option></select></label>
+        <label hidden><span data-i18n="kind">Tipo de nodo</span><select id="kind-filter"><option value="" data-i18n="all">Todos</option><option value="chunk" selected>Chunks</option><option value="document" data-i18n="documents">Documentos</option><option value="summary" data-i18n="summaries">Resúmenes derivados</option><option value="source_revision" data-i18n="archives">Revisiones archivadas</option></select></label>
+        <label><span data-i18n="tier">Clasificación</span><select id="tier-filter"><option value="" data-i18n="all">Todas</option><option>HOT</option><option>WARM</option><option>COLD</option><option value="unclassified" data-i18n="unclassified">Sin clasificar</option></select></label>
+        <label><span data-i18n="revision">Revisión</span><select id="revision-filter"><option value="" data-i18n="all">Todas</option><option value="current" data-i18n="current">Actual</option><option value="historical" data-i18n="historical">Histórica</option></select></label>
+        <label><span data-i18n="connectivity">Conectividad</span><select id="isolation-filter"><option value="" data-i18n="all">Todos</option><option value="isolated" data-i18n="isolated">Aislados</option><option value="connected" data-i18n="connected">Conectados</option></select></label>
+        <fieldset><legend data-i18n="edges">Aristas</legend><label class="check"><input type="checkbox" value="contains" checked><span data-i18n="contains">Contención</span></label><label class="check"><input type="checkbox" value="explicit" checked><span data-i18n="explicit">Enlace explícito</span></label><label class="check"><input type="checkbox" value="semantic_similarity" checked><span data-i18n="similarity">Similitud calculada</span></label><label class="check"><input type="checkbox" value="derived_from" checked><span data-i18n="derived">Procedencia derivada</span></label></fieldset>
+        <label><span data-i18n="color">Color por</span><select id="color-mode"><option value="project" selected data-i18n="project">Proyecto</option><option value="folder" data-i18n="folder">Carpeta</option><option value="tier" data-i18n="tier">Clasificación</option></select></label><label>Intensidad de líneas<input id="edge-opacity" type="range" min="0" max="100" value="18"></label><label>Detalle de líneas (100 = todas)<input id="edge-detail" type="range" min="0" max="100" value="35"></label><label>Zoom mínimo de líneas<input id="edge-zoom" type="range" min="0" max="8" step="0.25" value="0"></label><button id="reset" data-i18n="reset">Restablecer filtros</button>
+      </section>
+    </aside>
+    <div id="graph-view" class="graph-view inspector-collapsed" role="region" aria-label="Grafo e inspector">
+    <section class="workspace" aria-label="Grafo y lista accesible">
+      <div class="workspace-heading"><div><h2 id="project-title" data-i18n="choose">Selecciona un proyecto</h2><p id="generation" class="muted"></p></div><label class="mode"><span data-i18n="view">Vista</span><select id="mode" disabled><option value="full">Todos los chunks · GPU</option><option value="structural" hidden data-i18n="structure">Estructural</option><option value="semantic" id="semantic-option" data-i18n="embeddings" disabled>Proyección de embeddings</option></select></label></div>
+      <p id="projection-note" class="projection" data-i18n="structuralNote">Disposición estructural; la distancia no mide similitud.</p>
+      <nav id="navigation-breadcrumb" class="navigation-breadcrumb" aria-label="Ubicación en el mapa" aria-live="polite">Todos los proyectos</nav>
+      <div class="graph-toolbar" role="toolbar" aria-label="Controles del grafo"><button id="back-nucleus" data-i18n="backNucleus" disabled>← Volver</button><button id="zoom-in" aria-label="Acercar" title="Acercar">+</button><button id="zoom-out" aria-label="Alejar" title="Alejar">−</button><button id="fit" data-i18n="fit">Ajustar</button><button id="focus" data-i18n="focus" disabled>Enfocar vecinos</button><button id="unfocus" data-i18n="unfocus" disabled>Deshacer enfoque</button><button hidden id="pause" data-i18n="pause">Detener layout</button><button id="expand-graph" aria-expanded="false" aria-controls="graph-view" data-i18n="expandGraph">Ampliar grafo</button><button id="toggle-inspector" aria-expanded="false" aria-controls="inspector" data-i18n="toggleInspector">Inspector</button><span id="visible-count" class="muted"></span></div>
+      <p id="graph-counts" class="graph-counts" role="status" aria-live="polite"></p><progress id="load-progress" value="0" max="1"></progress><div class="canvas-wrap"><canvas id="graph" tabindex="0" aria-label="Grafo de chunks; usa la lista accesible para navegar los nodos"></canvas><canvas id="graph-overlay" aria-hidden="true"></canvas><div class="minimap-panel"><span data-i18n="minimap">Minimapa</span><canvas id="minimap" width="184" height="128" aria-label="Minimapa del grafo" tabindex="0"></canvas></div><div id="graph-tooltip" class="graph-tooltip" role="tooltip" hidden></div><div id="empty-state" data-i18n="initial">Los chunks de un proyecto autorizado aparecerán aquí.</div></div>
+      <div class="legend" aria-label="Leyenda"><span class="legend-edge contains" data-i18n="contains">Contención</span><span class="legend-edge explicit" data-i18n="explicit">Enlace explícito</span><span class="legend-edge semantic" data-i18n="similarity">Similitud calculada</span><span class="legend-edge derived" data-i18n="derived">Procedencia derivada</span><span class="tier hot">HOT</span><span class="tier warm">WARM</span><span class="tier cold">COLD</span><span class="tier neutral" data-i18n="unclassified">Sin clasificar</span></div>
+      <div id="tier-counts" class="muted" aria-live="polite"></div>
+      <div id="project-legend" class="project-legend" aria-label="Proyectos cargados" hidden></div>
+      <details class="folder-legend-wrap"><summary>Colores por carpeta / Folder colors</summary><div id="folder-legend" class="folder-legend"></div></details><div class="coverage"><p id="coverage" aria-live="polite"></p><div hidden><button id="previous" data-i18n="previous" disabled>Lote anterior</button><button id="next" data-i18n="next" disabled>Lote siguiente</button></div></div>
+      <details class="accessible"><summary data-i18n="list">Lista accesible de nodos</summary><p class="muted" data-i18n="listHint">Selecciona un nodo para consultar su texto, revisión y relaciones. Los filtros se aplican al lote cargado.</p><ul id="node-list" aria-label="Nodos del grafo"></ul><div class="list-paging"><button id="list-previous" data-i18n="previousList" disabled>Anterior</button><span id="list-page" class="muted"></span><button id="list-next" data-i18n="nextList" disabled>Siguiente</button></div></details>
+    </section>
+    <aside id="inspector" class="inspector" aria-label="Inspector de nodo"><div class="inspector-heading"><h2 data-i18n="inspector">Inspector</h2><button id="close-inspector" aria-label="Cerrar inspector" title="Cerrar inspector">×</button></div><p id="inspect-empty" class="muted" data-i18n="inspectHint">Selecciona un chunk del grafo o de la lista.</p><div id="inspect-content" hidden><h3 id="node-title"></h3><dl id="metadata"></dl><div class="detail-actions"><button id="read-chunk" data-i18n="readChunk">Leer chunk</button><button id="read-source" data-i18n="readSource">Leer fuente exacta</button><button id="copy-ref" data-i18n="copy">Copiar referencia</button></div><h3 id="text-kind"></h3><pre id="node-text" tabindex="0"></pre><button id="more-text" data-i18n="moreText" hidden>Leer página siguiente</button><h3 data-i18n="relations">Relaciones en el lote</h3><ul id="relations"></ul></div></aside>
+    </div>
+  </main>
+  <footer><span data-i18n="footer">Datos locales · Sin edición, indexación ni inferencia al visualizar</span><span id="sync-state"></span></footer>
+</body>
+</html>
