@@ -14,7 +14,10 @@ def put(source,target):
  target=stage/target;target.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(source,target);files.append(target)
 put(a.binary,'bin/vrg');(stage/'bin/vrg').chmod(0o755)
 put(repo/'README.md','README.md')
-put(repo/'docs/public/PROJECT_NUCLEI.md','docs/PROJECT_NUCLEI.md')
+for document in sorted((repo/'docs/public').glob('*.md')):
+ put(document,pathlib.Path('docs/public')/document.name)
+put(repo/'docs/assets/vrg-banner.svg','docs/assets/vrg-banner.svg')
+put(repo/'CHANGELOG.md','CHANGELOG.md')
 put(repo/'docs/RELEASE_PROTOCOL.md','docs/RELEASE_PROTOCOL.md')
 for name_license in ['LICENSE-MIT','LICENSE-APACHE']:put(repo/name_license,name_license)
 put(repo/'Cargo.lock','Cargo.lock')
@@ -61,5 +64,5 @@ with archive.open('wb') as output:
    for f in sorted(files):
     item=tar.gettarinfo(str(f),arcname=name+'/'+f.relative_to(stage).as_posix());item.uid=item.gid=0;item.uname=item.gname='';item.mtime=0
     with f.open('rb') as source:tar.addfile(item,source)
-checksum=sha(archive);(a.destination/'SHA256SUMS').write_text(checksum+'  '+archive.name+'\n')
+checksum=sha(archive);(a.destination/'SHA256SUMS.txt').write_text(checksum+'  '+archive.name+'\n')
 print(json.dumps({'package':str(archive),'sha256':checksum,'files':len(files),'dependency_notices':len(packages),'source_commit':commit}))
