@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashMap},
     fs,
     fs::File,
     fs::OpenOptions,
@@ -24,6 +24,44 @@ use crate::{
 const SCHEMA_VERSION: i64 = 2;
 const MAX_QUERY_RESULTS: usize = 1000;
 const SYNC_LOCK_FILE: &str = "vrg-sync.lock";
+
+// Resolve matching documents before touching their chunks. Starting from the
+// chunks view makes an exact path lookup walk every chunk in the generation.
+const EXACT_SEARCH_SQL: &str = "SELECT m.chunk_id, m.root_id, m.relative_path, m.revision, m.ordinal, \
+            m.start_byte, m.end_byte, o.payload, d.title, \
+            CASE WHEN lower(d.relative_path) = lower(?2) \
+                      OR lower(d.relative_path) = lower(?3) \
+                 THEN 1 ELSE 0 END \
+     FROM documents d \
+     CROSS JOIN chunk_manifests m INDEXED BY chunks_source_idx \
+       ON m.generation_id = d.generation_id AND m.root_id = d.root_id \
+      AND m.relative_path = d.relative_path \
+     CROSS JOIN text_objects o ON o.object_id = m.object_id \
+     WHERE d.generation_id = ?1 \
+       AND (json_array_length(?5)=0 OR d.root_id IN (SELECT value FROM json_each(?5))) \
+       AND (lower(d.relative_path) = lower(?2) OR lower(d.relative_path) = lower(?3) \
+            OR lower(d.title) = lower(?2)) \
+       AND (?6 IS NULL OR (d.root_id,d.relative_path) IN \
+         (SELECT json_extract(value,'$.root_id'),json_extract(value,'$.relative_path') FROM json_each(?6))) \
+     ORDER BY m.relative_path, m.ordinal LIMIT ?4";
+
+// MATCH must drive the join once, rather than executing an FTS lookup for each
+// active chunk. CROSS JOIN fixes only that join order; both root and source-scope
+// restrictions and the original bm25 ordering still apply before LIMIT.
+const FTS_SEARCH_SQL: &str = "SELECT m.chunk_id, m.root_id, m.relative_path, m.revision, m.ordinal, \
+            m.start_byte, m.end_byte, o.payload, d.title, bm25(chunk_fts) \
+     FROM chunk_fts \
+     CROSS JOIN text_objects o ON o.rowid = chunk_fts.rowid \
+     CROSS JOIN chunk_manifests m INDEXED BY chunks_object_idx \
+       ON m.generation_id = ?2 AND m.object_id = o.object_id \
+     CROSS JOIN documents d \
+       ON d.generation_id = m.generation_id AND d.root_id = m.root_id \
+      AND d.relative_path = m.relative_path \
+     WHERE chunk_fts MATCH ?1 AND m.generation_id = ?2 \
+       AND (json_array_length(?4)=0 OR m.root_id IN (SELECT value FROM json_each(?4))) \
+       AND (?5 IS NULL OR (m.root_id,m.relative_path) IN \
+         (SELECT json_extract(value,'$.root_id'),json_extract(value,'$.relative_path') FROM json_each(?5))) \
+     ORDER BY bm25(chunk_fts) LIMIT ?3";
 
 #[derive(Clone)]
 pub struct DerivedStore {
@@ -137,6 +175,12 @@ impl DerivedStore {
         connection
             .pragma_update(None, "synchronous", "FULL")
             .map_err(storage_error)?;
+        connection
+            .pragma_update(None, "cache_size", -2048)
+            .map_err(storage_error)?;
+        connection
+            .pragma_update(None, "mmap_size", 16 * 1024 * 1024)
+            .map_err(storage_error)?;
         initialize_schema(&connection)?;
         restrict_permissions(&canonical.join("vrg.sqlite3"), 0o600)?;
         for name in ["vrg.sqlite3-wal", "vrg.sqlite3-shm"] {
@@ -223,16 +267,48 @@ impl DerivedStore {
     }
 
     pub fn current_chunk_ids(&self, root_ids: &[String]) -> VrgResult<BTreeSet<String>> {
+        self.current_chunk_ids_scoped(root_ids, None)
+    }
+
+    /// Count active chunks and vectors for one exact model identity without
+    /// loading vector payloads into the status path.
+    pub fn semantic_coverage(&self, model_id: &str) -> VrgResult<(i64, i64)> {
+        let connection = self.lock()?;
+        let Some(generation) = active_generation(&connection)? else {
+            return Ok((0, 0));
+        };
+        let chunks: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM chunk_manifests WHERE generation_id=?1",
+                [&generation],
+                |row| row.get(0),
+            )
+            .map_err(storage_error)?;
+        let vectors: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM vector_manifests WHERE generation_id=?1 AND model_id=?2",
+                params![generation, model_id],
+                |row| row.get(0),
+            )
+            .map_err(storage_error)?;
+        Ok((chunks, vectors))
+    }
+
+    pub fn current_chunk_ids_scoped(
+        &self,
+        root_ids: &[String],
+        sources: Option<&BTreeSet<SourceRef>>,
+    ) -> VrgResult<BTreeSet<String>> {
         let _reader = self.acquire_reader_lease()?;
         let connection = self.lock()?;
         let Some(generation) = active_generation(&connection)? else {
             return Ok(BTreeSet::new());
         };
         let mut statement = connection
-            .prepare("SELECT chunk_id,root_id FROM chunk_manifests WHERE generation_id=?1")
+            .prepare("SELECT chunk_id,root_id FROM chunk_manifests WHERE generation_id=?1 AND (?2 IS NULL OR (root_id,relative_path) IN (SELECT json_extract(value,'$.root_id'),json_extract(value,'$.relative_path') FROM json_each(?2)))")
             .map_err(storage_error)?;
         let rows = statement
-            .query_map([generation], |r| {
+            .query_map(params![generation, source_scope_json(sources)?], |r| {
                 Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
             })
             .map_err(storage_error)?
@@ -529,6 +605,13 @@ impl DerivedStore {
             [now_unix_ms()?],
         ).map_err(storage_error)?;
         transaction.commit().map_err(storage_error)
+    }
+
+    /// The current writer changed owned derived projections, not an external
+    /// authoritative source. Preserve the independent filesystem-event revision.
+    pub fn mark_owned_projection_dirty(&self) -> VrgResult<()> {
+        self.lock()?.execute("UPDATE index_sync_status SET state='stale', checked_unix_ms=?1, error=NULL WHERE singleton=1 AND state!='indexing'",[now_unix_ms()?]).map_err(storage_error)?;
+        Ok(())
     }
 
     pub fn source_change_revision(&self) -> VrgResult<i64> {
@@ -988,6 +1071,16 @@ impl DerivedStore {
         root_ids: &[String],
         limit: usize,
     ) -> VrgResult<Vec<SearchCandidate>> {
+        self.exact_search_rows_scoped(query, root_ids, limit, None)
+    }
+
+    pub fn exact_search_rows_scoped(
+        &self,
+        query: &str,
+        root_ids: &[String],
+        limit: usize,
+        sources: Option<&BTreeSet<SourceRef>>,
+    ) -> VrgResult<Vec<SearchCandidate>> {
         let _reader = self.acquire_reader_lease()?;
         let connection = self.lock()?;
         let Some(generation) = active_generation(&connection)? else {
@@ -1006,18 +1099,7 @@ impl DerivedStore {
             format!("{normalized}.md")
         };
         let mut statement = connection
-            .prepare(
-                "SELECT c.chunk_id, c.root_id, c.relative_path, c.revision, c.ordinal, \
-                        c.start_byte, c.end_byte, c.body, d.title, \
-                        CASE WHEN lower(c.relative_path) = lower(?2) \
-                                  OR lower(c.relative_path) = lower(?3) \
-                             THEN 1 ELSE 0 END \
-                 FROM chunks c JOIN documents d USING (generation_id, root_id, relative_path) \
-                 WHERE c.generation_id = ?1 AND (json_array_length(?5)=0 OR c.root_id IN (SELECT value FROM json_each(?5))) AND \
-                   (lower(c.relative_path) = lower(?2) OR lower(c.relative_path) = lower(?3) \
-                    OR lower(d.title) = lower(?2)) \
-                 ORDER BY c.relative_path, c.ordinal LIMIT ?4",
-            )
+            .prepare(EXACT_SEARCH_SQL)
             .map_err(storage_error)?;
         let rows = statement
             .query_map(
@@ -1027,7 +1109,8 @@ impl DerivedStore {
                     path_with_extension,
                     MAX_QUERY_RESULTS as i64,
                     serde_json::to_string(root_ids)
-                        .map_err(|e| VrgError::Storage(e.to_string()))?
+                        .map_err(|e| VrgError::Storage(e.to_string()))?,
+                    source_scope_json(sources)?
                 ],
                 |row| {
                     let mut candidate = candidate_from_row(row)?;
@@ -1068,6 +1151,16 @@ impl DerivedStore {
         root_ids: &[String],
         limit: usize,
     ) -> VrgResult<Vec<SearchCandidate>> {
+        self.fts_search_rows_scoped(query, root_ids, limit, None)
+    }
+
+    pub fn fts_search_rows_scoped(
+        &self,
+        query: &str,
+        root_ids: &[String],
+        limit: usize,
+        sources: Option<&BTreeSet<SourceRef>>,
+    ) -> VrgResult<Vec<SearchCandidate>> {
         let _reader = self.acquire_reader_lease()?;
         let connection = self.lock()?;
         let Some(generation) = active_generation(&connection)? else {
@@ -1077,20 +1170,7 @@ impl DerivedStore {
         if fts_query.is_empty() {
             return Ok(Vec::new());
         }
-        let mut statement = connection
-            .prepare(
-                "SELECT c.chunk_id, c.root_id, c.relative_path, c.revision, c.ordinal, \
-                        c.start_byte, c.end_byte, c.body, d.title, bm25(chunk_fts) \
-                 FROM chunk_fts JOIN chunks c \
-                   ON chunk_fts.rowid = c.object_rowid \
-                 JOIN documents d \
-                   ON d.generation_id = c.generation_id \
-                  AND d.root_id = c.root_id AND d.relative_path = c.relative_path \
-                 WHERE chunk_fts MATCH ?1 AND c.generation_id = ?2 \
-                   AND (json_array_length(?4)=0 OR c.root_id IN (SELECT value FROM json_each(?4))) \
-                 ORDER BY bm25(chunk_fts) LIMIT ?3",
-            )
-            .map_err(storage_error)?;
+        let mut statement = connection.prepare(FTS_SEARCH_SQL).map_err(storage_error)?;
         let rows = statement
             .query_map(
                 params![
@@ -1098,7 +1178,8 @@ impl DerivedStore {
                     generation,
                     bounded_limit(limit),
                     serde_json::to_string(root_ids)
-                        .map_err(|e| VrgError::Storage(e.to_string()))?
+                        .map_err(|e| VrgError::Storage(e.to_string()))?,
+                    source_scope_json(sources)?
                 ],
                 |row| {
                     let mut candidate = candidate_from_row(row)?;
@@ -1132,7 +1213,7 @@ impl DerivedStore {
         model_id: &str,
         root_ids: &[String],
     ) -> VrgResult<Vec<StoredVector>> {
-        self.read_vectors(model_id, root_ids, true)
+        self.read_vectors(model_id, root_ids, true, None)
     }
 
     /// Vector metadata for cosine ranking; does not decompress COLD text.
@@ -1141,7 +1222,16 @@ impl DerivedStore {
         model_id: &str,
         root_ids: &[String],
     ) -> VrgResult<Vec<StoredVector>> {
-        self.read_vectors(model_id, root_ids, false)
+        self.vector_catalog_for_model_scoped(model_id, root_ids, None)
+    }
+
+    pub fn vector_catalog_for_model_scoped(
+        &self,
+        model_id: &str,
+        root_ids: &[String],
+        sources: Option<&BTreeSet<SourceRef>>,
+    ) -> VrgResult<Vec<StoredVector>> {
+        self.read_vectors(model_id, root_ids, false, sources)
     }
 
     fn read_vectors(
@@ -1149,6 +1239,7 @@ impl DerivedStore {
         model_id: &str,
         root_ids: &[String],
         include_bodies: bool,
+        sources: Option<&BTreeSet<SourceRef>>,
     ) -> VrgResult<Vec<StoredVector>> {
         let _reader = self.acquire_reader_lease()?;
         let connection = self.lock()?;
@@ -1167,6 +1258,8 @@ impl DerivedStore {
                   AND d.root_id = c.root_id AND d.relative_path = c.relative_path \
                  WHERE v.generation_id = ?1 AND v.model_id = ?2 \
                    AND (json_array_length(?3)=0 OR c.root_id IN (SELECT value FROM json_each(?3))) \
+                   AND (?4 IS NULL OR (c.root_id,c.relative_path) IN \
+                     (SELECT json_extract(value,'$.root_id'),json_extract(value,'$.relative_path') FROM json_each(?4))) \
                  ORDER BY c.root_id, c.relative_path, c.ordinal",
             ))
             .map_err(storage_error)?;
@@ -1176,7 +1269,8 @@ impl DerivedStore {
                     generation,
                     model_id,
                     serde_json::to_string(root_ids)
-                        .map_err(|e| VrgError::Storage(e.to_string()))?
+                        .map_err(|e| VrgError::Storage(e.to_string()))?,
+                    source_scope_json(sources)?
                 ],
                 |row| {
                     let chunk = chunk_from_row(row)?;
@@ -1361,6 +1455,10 @@ fn initialize_schema(connection: &Connection) -> VrgResult<()> {
                  FOREIGN KEY (generation_id, root_id, relative_path)
                      REFERENCES documents(generation_id, root_id, relative_path)
              );
+             CREATE INDEX IF NOT EXISTS chunks_source_idx
+                 ON chunk_manifests(generation_id, root_id, relative_path, ordinal);
+             CREATE INDEX IF NOT EXISTS chunks_object_idx
+                 ON chunk_manifests(generation_id, object_id);
              CREATE VIEW IF NOT EXISTS chunks AS SELECT m.*, o.payload AS body, o.rowid AS object_rowid
                  FROM chunk_manifests m JOIN text_objects o USING(object_id);
              CREATE VIRTUAL TABLE IF NOT EXISTS chunk_fts USING fts5(
@@ -1651,11 +1749,16 @@ fn persist_snapshot(
         }
     }
 
+    // Chunk IDs were validated unique before this transaction. Resolve once,
+    // rather than scanning C chunks for each of V vectors during publication.
+    let chunks_by_id: HashMap<&str, &TextChunk> = snapshot
+        .chunks
+        .iter()
+        .map(|chunk| (chunk.id.as_str(), chunk))
+        .collect();
     for vector in &snapshot.vectors {
-        let chunk = snapshot
-            .chunks
-            .iter()
-            .find(|c| c.id == vector.chunk_id)
+        let chunk = chunks_by_id
+            .get(vector.chunk_id.as_str())
             .ok_or_else(|| VrgError::Storage("vector has no chunk".into()))?;
         let input = text_object_id(&chunk.source.root_id, chunk.text.as_bytes());
         let bytes = encode_vector(&vector.values);
@@ -2767,4 +2870,12 @@ mod adaptive_storage_fault_tests {
             );
         }
     }
+}
+
+/// NULL means unscoped; Some(empty) deliberately admits no source tuples.
+fn source_scope_json(sources: Option<&BTreeSet<SourceRef>>) -> VrgResult<Option<String>> {
+    sources
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|error| VrgError::Storage(error.to_string()))
 }

@@ -1,5 +1,7 @@
 # VRG — Vault RAG Graph
 
+**0.7.0-rc.1 preview:** opt-in automatic project onboarding for Linux x86_64 and Codex. See [setup and limitations](docs/public/AUTO_PROJECTS_PREVIEW.md). It requires an explicitly authorized project parent and an existing local semantic model; it does not migrate an existing installation automatically.
+
 ![VRG — Vault RAG Graph](docs/assets/vrg-banner.svg)
 
 **Maintained by [galgo2077](https://github.com/galgo2077)** · [Website](https://galgo2077.github.io/VRG/) · [Setup](https://galgo2077.github.io/VRG/setup.html) · [Troubleshooting](https://galgo2077.github.io/VRG/#troubleshooting) · [Support development](https://buymeacoffee.com/galgo2077?new=1)

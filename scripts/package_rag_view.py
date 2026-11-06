@@ -22,6 +22,10 @@ put(repo/'docs/RELEASE_PROTOCOL.md','docs/RELEASE_PROTOCOL.md')
 for name_license in ['LICENSE-MIT','LICENSE-APACHE']:put(repo/name_license,name_license)
 put(repo/'Cargo.lock','Cargo.lock')
 for asset in ['index.html','app.js','style.css','nuclei.js']:put(repo/'src/view_assets'/asset,'assets/'+asset)
+if version.startswith('0.7.0-rc.'):
+ for script in ['vrg_auto_install.py','vrg_autoproject.py','vrg_global.py','vrg_global_hook.py','vrg_shared.py','vrg_sources.py','vrg_hook_observer.py']:
+  put(repo/'scripts'/script,'scripts/'+script)
+ put(repo/'schemas/MEMORY_PROPOSAL.schema.json','schemas/MEMORY_PROPOSAL.schema.json')
 registry=pathlib.Path(os.environ.get('CARGO_HOME',pathlib.Path.home()/'.cargo'))/'registry/src'
 packages=[];missing=[]
 for line in a.licenses_list.read_text().splitlines():

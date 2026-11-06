@@ -168,6 +168,25 @@ pub struct IndexReport {
     pub excluded: usize,
     pub failed: usize,
     pub semantic_status: ModuleStatus,
+    #[serde(default)]
+    pub work: IndexWork,
+}
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct IndexWork {
+    pub event_paths: usize,
+    pub full_scans: usize,
+    pub source_files_read: usize,
+    pub source_read_operations: usize,
+    pub chunks_embedded: usize,
+    pub vectors_reused_by_content: usize,
+    #[serde(default)]
+    pub policy_manifest_reads: usize,
+    #[serde(default)]
+    pub policy_cache_hits: usize,
+    #[serde(default)]
+    pub head_reads: usize,
+    #[serde(default)]
+    pub head_cache_hits: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

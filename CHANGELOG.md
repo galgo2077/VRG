@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.0-rc.1 — Automatic project onboarding preview
+
+- Opt-in discovery of new direct children under one explicitly authorized parent; each receives isolated memory and source profiles.
+- Local semantic source projection, graph relationships and dynamic bindings in a single shared HTTP runtime.
+- Native CAS note writes for newly enrolled memory roots, with scoped parent Stop transfer and incremental synchronization.
+- Private installation preparation and reviewed Codex configuration fragments; no automatic migration of existing installations, model download or stable-release replacement.
+
+
 ## 0.6.0 — Project Nuclei
 
 - Native read-only graph viewer with separate canonical project constellations and stable project colors.

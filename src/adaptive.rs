@@ -47,6 +47,8 @@ pub struct Producer {
 pub enum ProducerKind {
     Codex,
     Human,
+    /// Bounded native structural summaries; never represents an assistant review.
+    Mechanical,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -276,6 +278,9 @@ pub fn validate_proposal(
     if memories.len() != context.existing.len() {
         return Err(invalid("duplicate memory identity in existing state"));
     }
+    if matches!(proposal.producer.kind, ProducerKind::Mechanical) {
+        validate_mechanical_proposal(proposal, context, &sources)?;
+    }
     for operation in &proposal.operations {
         let mut excerpts = BTreeMap::<String, Vec<&str>>::new();
         for reference in &operation.sources {
@@ -417,6 +422,105 @@ pub fn validate_proposal(
         memories: memories.into_values().collect(),
         fingerprint,
     })
+}
+
+
+/// Native mechanical producers can summarize only their exact, authorized derived
+/// memory documents. They cannot create authority, certify truth, modify pins,
+/// erase conflicts, or replace assistant/human protected knowledge.
+fn validate_mechanical_proposal(
+    proposal: &Proposal,
+    context: &ValidationContext,
+    sources: &BTreeMap<String, &SourceDocument>,
+) -> VrgResult<()> {
+    if proposal.producer.identity != "vrg-native-code-synthesis-v1" {
+        return Err(VrgError::AccessDenied("unknown mechanical producer".into()));
+    }
+    for op in &proposal.operations {
+        if op.action != Action::UpsertSummary || op.sources.len() != 1
+            || op.reason_code != ReasonCode::ActiveWork
+            || op.target_tier.as_ref().is_some_and(|tier| *tier != MemoryTier::WARM)
+            || op.epistemic_state != Some(EpistemicState::Proposed)
+            || op.confidence != Some(0.0) || op.needs_expansion != Some(true)
+            || op.protected_facts.as_ref().is_none_or(|facts| !facts.is_empty())
+        {
+            return Err(VrgError::AccessDenied("mechanical summaries require bounded proposed structural evidence".into()));
+        }
+        let reference = &op.sources[0];
+        let doc = sources.get(&reference.source_id).ok_or_else(|| invalid("mechanical source unavailable"))?;
+        let expected_id = format!("mechanical:{}", hex::encode(Sha256::digest(reference.source_id.as_bytes())));
+        if op.memory_id != expected_id || !doc.source.relative_path.starts_with("incremental-v2/memory/")
+            || !doc.raw_markdown.starts_with("# Structural memory\n\nProducer: native_mechanical\nMethod: deterministic_structural_synthesis\n")
+            || op.summary.as_deref() != Some(doc.raw_markdown.as_str())
+            || reference.span_start != 0 || reference.span_end != doc.raw_markdown.len()
+        {
+            return Err(VrgError::AccessDenied("mechanical source or summary exceeds its derived namespace".into()));
+        }
+        if context.existing.iter().find(|m| m.memory_id == op.memory_id).is_some_and(|memory| {
+            memory.pinned || memory.epistemic_state != EpistemicState::Proposed
+                || !memory.protected_facts.is_empty()
+                || memory.summary.as_ref().is_some_and(|text| !text.starts_with("# Structural memory\n\nProducer: native_mechanical\n"))
+        }) {
+            return Err(VrgError::AccessDenied("mechanical producer cannot replace protected or conflicting memory".into()));
+        }
+    }
+    Ok(())
+}
+
+/// Build native proposals only when stable compact-document bytes have changed.
+/// Callers still require explicit adaptive opt-in, current authorized source reads,
+/// the native generation lock and validate_proposal before applying any proposal.
+/// No age-based demotion, deletion, source writes or provider calls occur here.
+pub fn mechanical_proposals(
+    project_id: &str,
+    privacy_scope_id: &str,
+    generation_id: &str,
+    created_at: &str,
+    documents: &[SourceDocument],
+    existing: &[StoredMemory],
+) -> VrgResult<Vec<Proposal>> {
+    let mut operations = Vec::new();
+    let mut docs = documents.iter().collect::<Vec<_>>();
+    docs.sort_by(|a, b| a.source.cmp(&b.source));
+    for doc in docs {
+        if !doc.source.relative_path.starts_with("incremental-v2/memory/") { continue; }
+        let sid = source_id(&doc.source);
+        let memory_id = format!("mechanical:{}", hex::encode(Sha256::digest(sid.as_bytes())));
+        if let Some(previous) = existing.iter().find(|m| m.memory_id == memory_id) {
+            if previous.pinned || previous.epistemic_state != EpistemicState::Proposed
+                || !previous.protected_facts.is_empty()
+                || previous.summary.as_ref().is_some_and(|text| !text.starts_with("# Structural memory\n\nProducer: native_mechanical\n"))
+            { continue; }
+            if previous.summary.as_deref() == Some(doc.raw_markdown.as_str())
+                && previous.sources.len() == 1
+                && previous.sources[0].revision_sha256 == doc.revision
+            { continue; }
+        }
+        let operation_id = format!("structural-{}", &hex::encode(Sha256::digest(sid.as_bytes()))[..32]);
+        operations.push(Operation {
+            operation_id, action: Action::UpsertSummary, memory_id,
+            sources: vec![SourceSpan { source_id: sid, revision_sha256: doc.revision.clone(), span_start: 0, span_end: doc.raw_markdown.len() }],
+            reason_code: ReasonCode::ActiveWork, target_tier: Some(MemoryTier::WARM),
+            summary: Some(doc.raw_markdown.clone()), protected_facts: Some(Vec::new()),
+            epistemic_state: Some(EpistemicState::Proposed), confidence: Some(0.0), needs_expansion: Some(true),
+        });
+    }
+    let mut proposals = Vec::new();
+    for batch in operations.chunks(32) {
+        let encoded = serde_json::to_vec(batch).map_err(|_| invalid("mechanical operation encoding failed"))?;
+        let mut identity = generation_id.as_bytes().to_vec(); identity.extend_from_slice(created_at.as_bytes()); identity.extend_from_slice(&encoded);
+        let digest = hex::encode(Sha256::digest(&identity));
+        let proposal = Proposal {
+            schema_version: 1, proposal_id: format!("mechanical-{}", digest),
+            project_id: project_id.to_owned(), privacy_scope_id: privacy_scope_id.to_owned(),
+            expected_generation: generation_id.to_owned(), created_at: created_at.to_owned(),
+            producer: Producer { kind: ProducerKind::Mechanical, identity: "vrg-native-code-synthesis-v1".into() },
+            operations: batch.to_vec(),
+        };
+        validate_shape(&proposal)?;
+        proposals.push(proposal);
+    }
+    Ok(proposals)
 }
 
 fn validate_shape(proposal: &Proposal) -> VrgResult<()> {

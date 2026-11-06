@@ -20,8 +20,10 @@ const MAX_SOURCE_BYTES: usize = 32 * 1_024;
 const MAX_SEARCH_SNIPPET_BYTES: usize = 512;
 
 #[derive(Clone)]
-struct VrgTools {
-    engine: Arc<VrgEngine>,
+pub(crate) struct VrgTools {
+    pub(crate) engine: Arc<VrgEngine>,
+    pub(crate) project: String,
+    pub(crate) shared: bool,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -33,10 +35,20 @@ struct SearchArgs {
     semantic: Option<bool>,
     graph_hops: Option<u8>,
     allow_stale: Option<bool>,
+    /// Optional current graph hub; restricts to itself and direct neighbors.
+    /// Available only without adaptive/explicit response budgets.
+    context_source: Option<ContextSourceArgs>,
     /// Hard aggregate serialized response bytes, including provenance and accounting.
     max_response_bytes: Option<usize>,
     /// UTF8-bytes/4 estimated units, not provider tokens.
     max_context_units: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ContextSourceArgs {
+    root_id: String,
+    relative_path: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -72,10 +84,31 @@ impl VrgTools {
     fn status(&self) -> Result<String, McpError> {
         let mut status =
             serde_json::to_value(self.engine.status()).map_err(|_| internal_error())?;
+        if self.shared {
+            status["shared_runtime"] = serde_json::json!({"pid": std::process::id(), "project": self.project, "transport": "streamable-http"});
+        }
+        status["memory_runtime"] = self
+            .engine
+            .memory_runtime_status()
+            .map_err(|_| internal_error())?;
+        if let Some(work) = self
+            .engine
+            .index_work_status()
+            .map_err(|_| internal_error())?
+        {
+            status["index_work"] = work;
+        }
         status["adaptive_memory"] = self
             .engine
             .adaptive_status()
             .map_err(|_| internal_error())?;
+        if let Some(updates) = self
+            .engine
+            .projection_update_status()
+            .map_err(|_| internal_error())?
+        {
+            status["incremental_projection"] = updates;
+        }
         serde_json::to_string(&status).map_err(|_| internal_error())
     }
 
@@ -108,6 +141,14 @@ impl VrgTools {
             return Err(invalid_params());
         }
 
+        if let Some(context) = &args.context_source {
+            validate_root_id(&context.root_id)?;
+            validate_relative_path(&context.relative_path)?;
+        }
+        let context_source = args.context_source.map(|context| SourceRef {
+            root_id: context.root_id,
+            relative_path: context.relative_path,
+        });
         let query = args.query;
         let request = SearchRequest {
             query: query.clone(),
@@ -117,6 +158,13 @@ impl VrgTools {
             graph_hops,
         };
         let policy = self.engine.adaptive_policy();
+        if context_source.is_some()
+            && (policy.enabled
+                || args.max_response_bytes.is_some()
+                || args.max_context_units.is_some())
+        {
+            return Err(invalid_params());
+        }
         if policy.enabled || args.max_response_bytes.is_some() || args.max_context_units.is_some() {
             let budget = crate::adaptive::Budget {
                 max_response_bytes: args.max_response_bytes.unwrap_or(policy.max_response_bytes),
@@ -133,8 +181,19 @@ impl VrgTools {
         }
         let mut response = self
             .engine
-            .search_with_policy(request, args.allow_stale.unwrap_or(false))
-            .map_err(|_| internal_error())?;
+            .search_scoped_with_policy(
+                request,
+                args.allow_stale.unwrap_or(false),
+                context_source.as_ref(),
+            )
+            .map_err(|error| match error {
+                VrgError::AccessDenied(_) | VrgError::InvalidConfig(_)
+                    if context_source.is_some() =>
+                {
+                    invalid_params()
+                }
+                _ => internal_error(),
+            })?;
         for hit in &mut response.hits {
             hit.snippet = bounded_search_snippet(&hit.snippet, &query);
         }
@@ -208,10 +267,7 @@ impl VrgTools {
         if !(1..=100).contains(&limit) {
             return Err(invalid_params());
         }
-        let cwd = std::env::current_dir()
-            .map_err(|_| internal_error())?
-            .to_string_lossy()
-            .to_string();
+        let cwd = self.project.clone();
         let events = self
             .engine
             .recent_session_events(&cwd, limit)
@@ -234,17 +290,23 @@ pub async fn serve(engine: VrgEngine) -> VrgResult<()> {
     engine.start_change_monitor()?;
     engine.reconcile_at_startup()?;
     let tools = VrgTools {
-        engine: Arc::new(engine),
+        engine: Arc::new(engine.clone()),
+        project: std::env::current_dir()?.to_string_lossy().into_owned(),
+        shared: false,
     };
     let service = tools
         .serve(stdio())
         .await
         .map_err(|_| VrgError::Mcp("failed to start stdio MCP service".into()))?;
-    service
-        .waiting()
-        .await
-        .map(|_| ())
-        .map_err(|_| VrgError::Mcp("stdio MCP service stopped with an error".into()))
+    let waiting = service.waiting();
+    tokio::pin!(waiting);
+    let mut idle = tokio::time::interval(std::time::Duration::from_secs(30));
+    loop {
+        tokio::select! {
+            result = &mut waiting => return result.map(|_| ()).map_err(|_| VrgError::Mcp("stdio MCP service stopped with an error".into())),
+            _ = idle.tick() => engine.release_idle_resources(),
+        }
+    }
 }
 
 fn validate_root_id(root_id: &str) -> Result<(), McpError> {

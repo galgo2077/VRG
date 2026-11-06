@@ -122,7 +122,48 @@ pub fn read_source(
     relative_path: &str,
     max_bytes: usize,
 ) -> VrgResult<SourceDocument> {
+    read_source_impl(config, root_id, relative_path, max_bytes, true)
+}
+pub(crate) fn read_index_source(
+    config: &VrgConfig,
+    root_id: &str,
+    relative_path: &str,
+    max_bytes: usize,
+) -> VrgResult<SourceDocument> {
+    read_source_impl(config, root_id, relative_path, max_bytes, false)
+}
+pub(crate) fn current_revision(config: &VrgConfig, source: &SourceRef) -> VrgResult<String> {
+    if let Some(revision) =
+        crate::projection::updates::direct_revision(config, &source.root_id, &source.relative_path)?
+    {
+        return Ok(revision);
+    }
+    Ok(read_source(
+        config,
+        &source.root_id,
+        &source.relative_path,
+        DEFAULT_MAX_SOURCE_BYTES,
+    )?
+    .revision)
+}
+fn read_source_impl(
+    config: &VrgConfig,
+    root_id: &str,
+    relative_path: &str,
+    max_bytes: usize,
+    verify_dependencies: bool,
+) -> VrgResult<SourceDocument> {
     config.validate()?;
+    if max_bytes == 0 {
+        return Err(VrgError::InvalidConfig(
+            "source read limit must be positive".into(),
+        ));
+    }
+    if let Some(document) =
+        crate::projection::updates::read_direct_source(config, root_id, relative_path, max_bytes)?
+    {
+        return Ok(document);
+    }
     if max_bytes == 0 || max_bytes > DEFAULT_MAX_SOURCE_BYTES {
         return Err(VrgError::InvalidConfig(format!(
             "max_bytes must be between 1 and {DEFAULT_MAX_SOURCE_BYTES}"
@@ -180,12 +221,21 @@ pub fn read_source(
             "source exceeds the read limit".into(),
         ));
     }
-    parse_document(
+    let document = parse_document(
         root_id,
         relative_path,
         bytes,
         metadata.modified().ok().map(|time| time.into_std()),
-    )
+    )?;
+    if verify_dependencies {
+        crate::projection::updates::authorize_output(
+            config,
+            root_id,
+            relative_path,
+            &document.revision,
+        )?;
+    }
+    Ok(document)
 }
 
 fn scan_dir(
@@ -442,7 +492,7 @@ fn split_frontmatter(markdown: &str) -> VrgResult<(BTreeMap<String, serde_json::
 
 /// Read only the YAML prefix needed to determine whether the whole note is private. A private
 /// note's Markdown body is not loaded, indexed, returned, or persisted.
-fn read_private_frontmatter(reader: &mut impl Read) -> VrgResult<bool> {
+pub(crate) fn read_private_frontmatter(reader: &mut impl Read) -> VrgResult<bool> {
     const OPENERS: [&[u8]; 4] = [
         b"---\n",
         b"---\r\n",

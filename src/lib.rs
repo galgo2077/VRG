@@ -12,6 +12,7 @@ pub mod mcp_server;
 pub mod model_setup;
 #[cfg(any(test, all(target_os = "macos", target_arch = "x86_64")))]
 mod onnx_source_setup;
+pub mod projection;
 pub mod retrieval;
 pub mod semantic;
 pub mod setup;
@@ -37,3 +38,9 @@ pub use contracts::{
 };
 pub use engine::VrgEngine;
 pub use error::{VrgError, VrgResult};
+
+pub mod code_synthesis;
+
+pub mod mechanical_memory;
+
+pub mod shared_runtime;

@@ -1,4 +1,32 @@
+use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::path::PathBuf;
+thread_local! { static SOURCE_READS: RefCell<(BTreeSet<PathBuf>, usize)> = RefCell::new((BTreeSet::new(), 0)); }
+thread_local! { static METADATA_READS: std::cell::Cell<[usize;4]> = const { std::cell::Cell::new([0;4]) }; }
+pub(crate) fn record_metadata_read(policy: bool, hit: bool) {
+    METADATA_READS.with(|value| {
+        let mut counts = value.get();
+        counts[if policy {
+            if hit { 1 } else { 0 }
+        } else {
+            if hit { 3 } else { 2 }
+        }] += 1;
+        value.set(counts);
+    });
+}
+pub(crate) fn record_source_read(path: &std::path::Path) {
+    SOURCE_READS.with(|reads| {
+        let mut reads = reads.borrow_mut();
+        reads.0.insert(path.to_owned());
+        reads.1 += 1;
+    });
+}
+fn source_read_counts() -> (usize, usize) {
+    SOURCE_READS.with(|reads| {
+        let reads = reads.borrow();
+        (reads.0.len(), reads.1)
+    })
+}
 
 #[cfg(feature = "f4-instrumentation")]
 use std::{
@@ -35,6 +63,24 @@ pub fn index(
     store: &DerivedStore,
     embedder: Option<&LocalEmbedder>,
 ) -> VrgResult<IndexReport> {
+    index_scoped(config, store, embedder, None)
+}
+pub fn index_paths(
+    config: &VrgConfig,
+    store: &DerivedStore,
+    embedder: Option<&LocalEmbedder>,
+    paths: &BTreeSet<PathBuf>,
+) -> VrgResult<IndexReport> {
+    index_scoped(config, store, embedder, Some(paths))
+}
+fn index_scoped(
+    config: &VrgConfig,
+    store: &DerivedStore,
+    embedder: Option<&LocalEmbedder>,
+    paths: Option<&BTreeSet<PathBuf>>,
+) -> VrgResult<IndexReport> {
+    SOURCE_READS.with(|reads| *reads.borrow_mut() = (BTreeSet::new(), 0));
+    METADATA_READS.with(|reads| reads.set([0; 4]));
     config.validate()?;
     if config.roots.is_empty() {
         return Err(VrgError::InvalidConfig(
@@ -42,7 +88,24 @@ pub fn index(
         ));
     }
 
-    let scan = vault::scan_roots(config)?;
+    let changed_projection = if let Some(paths) = paths {
+        crate::projection::updates::reconcile_paths(config, paths)?
+    } else {
+        crate::projection::reconcile(config)?
+    };
+    if changed_projection {
+        store.mark_owned_projection_dirty()?;
+    }
+    let projection_head = crate::projection::updates::head_token(config)?;
+    let previous = store.load_current_snapshot()?;
+    let scan = match crate::projection::updates::scan_authorized(
+        config,
+        previous.as_ref(),
+        paths.is_some(),
+    )? {
+        Some(scan) => scan,
+        None => vault::scan_roots(config)?,
+    };
     if !scan.issues.is_empty() {
         let summary = scan
             .issues
@@ -64,7 +127,11 @@ pub fn index(
         )));
     }
 
-    let previous = store.load_current_snapshot()?;
+    crate::projection::updates::authorize_scan(
+        config,
+        &scan.documents,
+        projection_head.as_deref(),
+    )?;
     let expected_parent = previous
         .as_ref()
         .map(|snapshot| snapshot.generation_id.clone());
@@ -112,6 +179,22 @@ pub fn index(
     let mut vectors = Vec::new();
     let mut chunks_to_embed = Vec::new();
     let selected_model = embedder.map(LocalEmbedder::model_id);
+    let chunks_by_id = previous
+        .as_ref()
+        .map(|snapshot| {
+            snapshot
+                .chunks
+                .iter()
+                .map(|chunk| (chunk.id.as_str(), chunk.text.as_str()))
+                .collect::<HashMap<_, _>>()
+        })
+        .unwrap_or_default();
+    let vectors_by_text: HashMap<&str, &VectorEmbedding> = prior_vectors
+        .iter()
+        .filter(|v| selected_model.is_some_and(|m| v.model_id == m))
+        .filter_map(|v| chunks_by_id.get(v.chunk_id.as_str()).map(|text| (*text, v)))
+        .collect();
+    let mut content_reused = 0usize;
     let mut changed = 0usize;
     let mut unchanged = 0usize;
     let current_sources: HashSet<SourceRef> = scan
@@ -159,27 +242,26 @@ pub fn index(
         }
 
         for chunk in &document_chunks {
+            let mut selected_present = false;
             if let Some(prior) = vectors_by_chunk.get(chunk.id.as_str()) {
                 for vector in prior.iter().copied() {
                     if selected_model.is_none_or(|model_id| vector.model_id == model_id) {
+                        selected_present |=
+                            selected_model.is_some_and(|model_id| vector.model_id == model_id);
                         vectors.push(vector.clone());
                     }
                 }
             }
-        }
-
-        if let Some(model_id) = selected_model {
-            let existing_ids: HashSet<&str> = vectors
-                .iter()
-                .filter(|vector| vector.model_id == model_id)
-                .map(|vector| vector.chunk_id.as_str())
-                .collect();
-            chunks_to_embed.extend(
-                document_chunks
-                    .iter()
-                    .filter(|chunk| !existing_ids.contains(chunk.id.as_str()))
-                    .cloned(),
-            );
+            if selected_model.is_some() && !selected_present {
+                if let Some(prior) = vectors_by_text.get(chunk.text.as_str()) {
+                    let mut reused = (**prior).clone();
+                    reused.chunk_id = chunk.id.clone();
+                    vectors.push(reused);
+                    content_reused += 1;
+                } else {
+                    chunks_to_embed.push(chunk.clone());
+                }
+            }
         }
         chunks.append(&mut document_chunks);
     }
@@ -204,10 +286,47 @@ pub fn index(
         ),
     };
 
+    // The selected model/passage pipeline is identical for this entire batch.
+    // Cross-source/worktree chunk IDs differ even when their exact input text
+    // does not. Submit each distinct text once and fan its vector out to every
+    // real chunk identity; no source/chunk metadata is deduplicated away.
+    let mut unique_by_text = HashMap::<&str, usize>::new();
+    let mut unique_pending = Vec::<TextChunk>::new();
+    let mut pending_fanout = Vec::<Vec<String>>::new();
+    for chunk in &chunks_to_embed {
+        if let Some(index) = unique_by_text.get(chunk.text.as_str()) {
+            pending_fanout[*index].push(chunk.id.clone());
+        } else {
+            unique_by_text.insert(chunk.text.as_str(), unique_pending.len());
+            unique_pending.push(chunk.clone());
+            pending_fanout.push(Vec::new());
+        }
+    }
+    let (source_files_read, source_read_operations) = source_read_counts();
+    let mut work = crate::contracts::IndexWork {
+        event_paths: paths.map_or(0, BTreeSet::len),
+        full_scans: usize::from(paths.is_none()),
+        source_files_read,
+        source_read_operations,
+        chunks_embedded: 0,
+        vectors_reused_by_content: content_reused,
+        ..Default::default()
+    };
     if let Some(embedder) = embedder {
-        if !chunks_to_embed.is_empty() {
-            match embedder.embed_chunks(&chunks_to_embed) {
-                Ok(mut generated) => vectors.append(&mut generated),
+        if !unique_pending.is_empty() {
+            match embedder.embed_chunks(&unique_pending) {
+                Ok(generated) => {
+                    work.chunks_embedded = generated.len();
+                    for (index, vector) in generated.into_iter().enumerate() {
+                        for duplicate_id in &pending_fanout[index] {
+                            let mut reused = vector.clone();
+                            reused.chunk_id = duplicate_id.clone();
+                            vectors.push(reused);
+                            work.vectors_reused_by_content += 1;
+                        }
+                        vectors.push(vector);
+                    }
+                }
                 Err(error) => {
                     semantic_status = ModuleStatus::Degraded(error.to_string());
                 }
@@ -223,17 +342,38 @@ pub fn index(
         .as_ref()
         .is_none_or(|snapshot| !same_vector_identity(&snapshot.vectors, &vectors));
 
+    // Reused chunks/vectors are already owned by the outgoing snapshot. Once
+    // comparison is complete, release the previous generation and borrowed
+    // lookup maps before fingerprinting/publication instead of retaining both.
+    drop(vectors_by_text);
+    drop(chunks_by_id);
+    drop(vectors_by_chunk);
+    drop(prior_documents);
+    drop(prior_chunks);
+    drop(previous);
+
     if !source_or_chunks_changed && unchanged_graph && !vector_set_changed {
-        return Ok(IndexReport {
-            generation_id: expected_parent,
-            roots_scanned: config.roots.len(),
-            files_seen: scan.files_seen,
-            indexed: 0,
-            unchanged,
-            excluded: scan.excluded,
-            failed: 0,
-            semantic_status,
-        });
+        crate::projection::updates::mark_indexed(
+            config,
+            projection_head.as_deref(),
+            expected_parent.as_deref(),
+        )?;
+        return finish_report(
+            config,
+            store,
+            IndexReport {
+                generation_id: expected_parent,
+                roots_scanned: config.roots.len(),
+                files_seen: scan.files_seen,
+                indexed: 0,
+                unchanged,
+                excluded: scan.excluded,
+                failed: 0,
+                semantic_status,
+                work,
+            },
+            &scan.documents,
+        );
     }
 
     documents.sort_by(|left, right| left.source.cmp(&right.source));
@@ -257,18 +397,30 @@ pub fn index(
     };
     snapshot.generation_id = generation_id(&snapshot, expected_parent.as_deref())?;
     f4_barrier_before_commit()?;
-    store.commit_generation(snapshot.clone(), expected_parent.as_deref())?;
+    let published_generation = snapshot.generation_id.clone();
+    store.commit_generation(snapshot, expected_parent.as_deref())?;
+    crate::projection::updates::mark_indexed(
+        config,
+        projection_head.as_deref(),
+        Some(&published_generation),
+    )?;
 
-    Ok(IndexReport {
-        generation_id: Some(snapshot.generation_id),
-        roots_scanned: config.roots.len(),
-        files_seen: scan.files_seen,
-        indexed: changed,
-        unchanged,
-        excluded: scan.excluded,
-        failed: 0,
-        semantic_status,
-    })
+    finish_report(
+        config,
+        store,
+        IndexReport {
+            generation_id: Some(published_generation),
+            roots_scanned: config.roots.len(),
+            files_seen: scan.files_seen,
+            indexed: changed,
+            unchanged,
+            excluded: scan.excluded,
+            failed: 0,
+            semantic_status,
+            work,
+        },
+        &scan.documents,
+    )
 }
 
 /// Test-only process barrier used by the approved F4-04 two-writer procedure.
@@ -516,25 +668,111 @@ fn sorted_edges(mut edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
 }
 
 fn generation_id(snapshot: &IndexSnapshot, parent_generation: Option<&str>) -> VrgResult<String> {
-    let encoded = serde_json::to_vec(&(
-        GENERATION_SCHEMA,
-        parent_generation,
-        &snapshot.documents,
-        &snapshot.chunks,
-        &snapshot.edges,
-        snapshot
-            .vectors
-            .iter()
-            .map(|vector| {
-                (
-                    &vector.chunk_id,
-                    &vector.model_id,
-                    vector.dimensions,
-                    &vector.values,
-                )
-            })
-            .collect::<Vec<_>>(),
-    ))
-    .map_err(|error| VrgError::Storage(format!("cannot fingerprint index generation: {error}")))?;
-    Ok(hex::encode(Sha256::digest(encoded)))
+    use std::io::{BufWriter, Write};
+    // digest 0.11 intentionally has no io::Write implementation. This sink is
+    // the minimal adapter; serde's identical compact JSON bytes flow into SHA
+    // through a bounded native buffer rather than a snapshot-sized Vec<u8>.
+    struct HashWriter(Sha256);
+    impl Write for HashWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.update(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut hash = HashWriter(Sha256::new());
+    {
+        let mut writer = BufWriter::with_capacity(64 * 1024, &mut hash);
+        serde_json::to_writer(
+            &mut writer,
+            &(
+                GENERATION_SCHEMA,
+                parent_generation,
+                &snapshot.documents,
+                &snapshot.chunks,
+                &snapshot.edges,
+                snapshot
+                    .vectors
+                    .iter()
+                    .map(|vector| {
+                        (
+                            &vector.chunk_id,
+                            &vector.model_id,
+                            vector.dimensions,
+                            &vector.values,
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+            ),
+        )
+        .map_err(|error| {
+            VrgError::Storage(format!("cannot fingerprint index generation: {error}"))
+        })?;
+        writer.flush().map_err(|error| {
+            VrgError::Storage(format!("cannot fingerprint index generation: {error}"))
+        })?;
+    }
+    Ok(hex::encode(hash.0.finalize()))
+}
+
+fn finish_report(
+    config: &VrgConfig,
+    store: &DerivedStore,
+    mut report: IndexReport,
+    documents: &[SourceDocument],
+) -> VrgResult<IndexReport> {
+    if let Some(generation) = report.generation_id.as_deref() {
+        crate::mechanical_memory::apply_under_sync(
+            config,
+            store,
+            generation,
+            documents,
+            crate::projection::updates::automatic_memory_enabled(config)?,
+        )?;
+    }
+    let (files, operations) = source_read_counts();
+    report.work.source_files_read = files;
+    report.work.source_read_operations = operations;
+    let metadata = METADATA_READS.with(std::cell::Cell::get);
+    report.work.policy_manifest_reads = metadata[0];
+    report.work.policy_cache_hits = metadata[1];
+    report.work.head_reads = metadata[2];
+    report.work.head_cache_hits = metadata[3];
+    persist_work(config, &report)?;
+    Ok(report)
+}
+fn persist_work(config: &VrgConfig, report: &IndexReport) -> VrgResult<()> {
+    use std::io::Write;
+    #[cfg(unix)]
+    use std::os::unix::fs::OpenOptionsExt;
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let value = serde_json::json!({"generation_id":report.generation_id,"unix_ns":timestamp.to_string(),"indexed":report.indexed,"unchanged":report.unchanged,"work":report.work});
+    let bytes = serde_json::to_vec(&value).map_err(|error| VrgError::Storage(error.to_string()))?;
+    let temporary = config.data_dir.join(format!(
+        ".index-work-{}-{timestamp}.tmp",
+        std::process::id()
+    ));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options.open(&temporary)?;
+    file.write_all(&bytes)?;
+    file.sync_all()?;
+    std::fs::rename(temporary, config.data_dir.join("last-index-work.json"))?;
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    options
+        .mode(0o600)
+        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
+    let mut history = options.open(config.data_dir.join("index-work.jsonl"))?;
+    history.write_all(&bytes)?;
+    history.write_all(b"\n")?;
+    Ok(())
 }

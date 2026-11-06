@@ -17,6 +17,8 @@ pub struct VrgConfig {
     /// Explicit opt-in; existing profiles retain classic retrieval by default.
     #[serde(default)]
     pub adaptive_memory: AdaptiveMemoryConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub projection_invalidation: Option<crate::projection::ProjectionConfig>,
     pub data_dir: PathBuf,
     #[serde(default)]
     pub semantic_model: Option<SemanticModelConfig>,
@@ -89,6 +91,7 @@ impl Default for VrgConfig {
             roots: Vec::new(),
             project_memory: Vec::new(),
             adaptive_memory: AdaptiveMemoryConfig::default(),
+            projection_invalidation: None,
             data_dir: default_data_dir(),
             semantic_model: None,
             capture_session_events: false,
@@ -153,6 +156,14 @@ impl VrgConfig {
     }
 
     pub fn validate(&self) -> VrgResult<()> {
+        if self.projection_invalidation.is_some()
+            && self.adaptive_memory.enabled
+            && !crate::projection::updates::automatic_memory_enabled(self)?
+        {
+            return Err(VrgError::InvalidConfig(
+                "projection invalidation does not support adaptive memory".into(),
+            ));
+        }
         if !self.data_dir.is_absolute() {
             return Err(VrgError::InvalidConfig(
                 "data_dir must be an absolute path".into(),

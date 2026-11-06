@@ -1,4 +1,6 @@
 use std::{
+    collections::BTreeSet,
+    path::PathBuf,
     sync::{
         Arc, Condvar, Mutex, Weak,
         atomic::{AtomicU64, Ordering},
@@ -48,6 +50,12 @@ struct ChangeMonitor {
     _monitor_lock: std::fs::File,
     epoch: Arc<AtomicU64>,
     handled_epoch: Arc<AtomicU64>,
+    changes: Arc<Mutex<SourceChanges>>,
+}
+#[derive(Clone, Debug, Default)]
+struct SourceChanges {
+    full: bool,
+    paths: BTreeSet<PathBuf>,
 }
 
 impl VrgEngine {
@@ -99,6 +107,26 @@ impl VrgEngine {
         })
     }
 
+    /// Called by the MCP task; never queue behind an active query/index operation.
+    pub fn release_idle_resources(&self) {
+        if let Ok(state) = self.state.try_lock() {
+            if let Some(embedder) = &state.embedder {
+                embedder.release_idle(Duration::from_secs(120));
+            }
+        }
+    }
+
+    pub fn memory_runtime_status(&self) -> VrgResult<serde_json::Value> {
+        let state = self.lock_state()?;
+        Ok(serde_json::json!({
+            "model_resident": state.embedder.as_ref().is_some_and(LocalEmbedder::is_resident),
+            "model_idle_seconds": 120, "idle_check_seconds": 30,
+            "event_batch_seconds": 30, "event_path_capacity": 4096,
+            "sqlite_cache_kib": 2048, "sqlite_mmap_bytes": 16777216,
+            "model_id": state.embedder.as_ref().map(LocalEmbedder::model_id),
+        }))
+    }
+
     pub fn status(&self) -> EngineStatus {
         let Ok(state) = self.state.lock() else {
             return failed_engine_status("engine lock poisoned");
@@ -128,7 +156,20 @@ impl VrgEngine {
         EngineStatus {
             runtime_identity: state.runtime_identity.clone(),
             text: ModuleStatus::Ready,
-            semantic: state.semantic_status.clone(),
+            semantic: match (&state.semantic_status, &state.embedder) {
+                (ModuleStatus::Ready, Some(embedder)) => {
+                    match state.store.semantic_coverage(embedder.model_id()) {
+                        Ok((chunks, vectors)) if chunks > 0 && chunks == vectors => {
+                            ModuleStatus::Ready
+                        }
+                        Ok((chunks, vectors)) => ModuleStatus::Degraded(format!(
+                            "local model is configured but active vector coverage is {vectors}/{chunks}"
+                        )),
+                        Err(error) => ModuleStatus::Degraded(error.to_string()),
+                    }
+                }
+                _ => state.semantic_status.clone(),
+            },
             graph: if generation_id.is_some() {
                 ModuleStatus::Ready
             } else {
@@ -165,6 +206,17 @@ impl VrgEngine {
 
     pub fn index(&self) -> VrgResult<IndexReport> {
         self.start_change_monitor()?;
+        self.index_with_existing_guard()
+    }
+
+    /// A short CLI index still guards authoritative files, while its owned
+    /// corpus writes are not misclassified as external filesystem changes.
+    pub(crate) fn index_once(&self) -> VrgResult<IndexReport> {
+        self.start_change_monitor_with_derived(false)?;
+        self.index_with_existing_guard()
+    }
+
+    fn index_with_existing_guard(&self) -> VrgResult<IndexReport> {
         let mut state = self.lock_state()?;
         if state.config.roots.is_empty() {
             return Err(VrgError::InvalidConfig(
@@ -192,6 +244,14 @@ impl VrgEngine {
     /// Start one cross-platform filesystem watcher and a coalescing reconciliation
     /// worker. Manifests/hashes remain the correctness fallback for missed events.
     pub fn start_change_monitor(&self) -> VrgResult<()> {
+        // Projected corpora are owned output. Watching their publication feeds
+        // our own writes back into source invalidation. The projection manifest
+        // supplies the authoritative code/note roots; ordinary vaults still
+        // watch their configured roots when no projection manifest is present.
+        self.start_change_monitor_with_derived(false)
+    }
+
+    fn start_change_monitor_with_derived(&self, include_derived: bool) -> VrgResult<()> {
         let mut state = self.lock_state()?;
         if state.config.roots.is_empty() || state.monitor.is_some() {
             return Ok(());
@@ -203,6 +263,11 @@ impl VrgEngine {
         let epoch = Arc::new(AtomicU64::new(1));
         let handled_epoch = Arc::new(AtomicU64::new(0));
         let signal = Arc::new((Mutex::new(true), Condvar::new()));
+        let changes = Arc::new(Mutex::new(SourceChanges {
+            full: true,
+            paths: BTreeSet::new(),
+        }));
+        let callback_changes = Arc::clone(&changes);
         let roots = state
             .config
             .roots
@@ -214,41 +279,63 @@ impl VrgEngine {
                     .map(|path| (path, root.clone()))
             })
             .collect::<Vec<_>>();
+        let projection_sources = crate::projection::updates::watch_sources(&state.config)?;
+        let callback_sources = projection_sources.clone();
         let callback_epoch = Arc::clone(&epoch);
         let callback_signal = Arc::clone(&signal);
         let callback_roots = roots.clone();
         let callback_store = state.store.clone();
         let watcher_result =
             notify::recommended_watcher(move |result: notify::Result<notify::Event>| {
-                let relevant = match result {
+                let (full, paths) = match result {
                     Ok(event) => {
-                        let read_only_access = matches!(
+                        if matches!(
                             event.kind,
                             EventKind::Access(
                                 AccessKind::Read
                                     | AccessKind::Open(AccessMode::Any | AccessMode::Read)
                                     | AccessKind::Close(AccessMode::Read)
                             )
-                        );
-                        !read_only_access
-                            && event.paths.iter().any(|path| {
-                                callback_roots.iter().any(|(root_path, root_config)| {
-                                    let Ok(relative) = path.strip_prefix(root_path) else {
-                                        return false;
-                                    };
-                                    if crate::vault::is_excluded(relative, root_config) {
-                                        return false;
-                                    }
-                                    if crate::vault::is_markdown(relative) {
-                                        return true;
-                                    }
-                                    path.is_dir() || !path.exists()
+                        ) {
+                            return;
+                        }
+                        let full = event.need_rescan()
+                            || event.paths.iter().any(|path| {
+                                path.file_name().is_some_and(|name| name == ".codexignore")
+                            });
+                        let paths = event
+                            .paths
+                            .into_iter()
+                            .filter(|path| {
+                                crate::projection::updates::source_event_relevant(
+                                    &callback_sources,
+                                    path,
+                                ) || callback_roots.iter().any(|(root, config)| {
+                                    path.strip_prefix(root).ok().is_some_and(|relative| {
+                                        !crate::vault::is_excluded(relative, config)
+                                            && (crate::vault::is_markdown(relative)
+                                                || path.is_dir()
+                                                || !path.exists())
+                                    })
                                 })
                             })
+                            .collect::<BTreeSet<_>>();
+                        (full, paths)
                     }
-                    Err(_) => true,
+                    Err(_) => (true, BTreeSet::new()),
                 };
+                let relevant = full || !paths.is_empty();
                 if relevant {
+                    if let Ok(mut changes) = callback_changes.lock() {
+                        changes.full |= full;
+                        changes.paths.extend(paths);
+                        // Overflow falls back to existing durable stale/recovery
+                        // reconciliation; do not retain an unbounded event queue.
+                        if changes.full || changes.paths.len() > 4096 {
+                            changes.full = true;
+                            changes.paths.clear();
+                        }
+                    }
                     let _ = callback_store.mark_index_stale();
                     callback_epoch.fetch_add(1, Ordering::AcqRel);
                     if let Ok(mut pending) = callback_signal.0.lock() {
@@ -266,10 +353,25 @@ impl VrgEngine {
                 return Ok(());
             }
         };
+        let watch_configured_roots = include_derived || projection_sources.is_empty();
         for (path, _) in &roots {
+            if !watch_configured_roots {
+                continue;
+            }
             if let Err(error) = watcher.watch(path, RecursiveMode::Recursive) {
                 state.monitor_status = ModuleStatus::Degraded(format!(
                     "filesystem notifications unavailable: {error}"
+                ));
+                return Ok(());
+            }
+        }
+        for (path, _) in &projection_sources {
+            if roots.iter().any(|(root, _)| root == path) {
+                continue;
+            }
+            if let Err(error) = watcher.watch(path, RecursiveMode::Recursive) {
+                state.monitor_status = ModuleStatus::Degraded(format!(
+                    "source filesystem notifications unavailable: {error}"
                 ));
                 return Ok(());
             }
@@ -284,6 +386,7 @@ impl VrgEngine {
             _monitor_lock: monitor_lock,
             epoch: Arc::clone(&epoch),
             handled_epoch: Arc::clone(&handled_epoch),
+            changes,
         });
         let weak_state = Arc::downgrade(&self.state);
         thread::Builder::new()
@@ -304,6 +407,49 @@ impl VrgEngine {
 
     /// Refresh the derived index once for a Codex Stop event. The event key is
     /// persisted so duplicated Stop handlers cannot republish the same turn.
+    /// Use the existing native monitor's publication. A full reconciliation is
+    /// requested only when this process must recover an absent monitor owner.
+    pub fn sync_existing_or_recover(&self) -> VrgResult<serde_json::Value> {
+        let started = std::time::Instant::now();
+        let deadline = started + Duration::from_secs(60);
+        let mut recovery_requested = false;
+        loop {
+            let state = self.lock_state()?;
+            if state.config.roots.is_empty() {
+                return Ok(
+                    serde_json::json!({"state":"disabled","reason":"no authorized source roots","recovery_requested":false}),
+                );
+            }
+            let active = state.monitor.is_some() || state.store.monitor_is_active()?;
+            let caught_up = state.monitor.as_ref().is_none_or(|monitor| {
+                monitor.epoch.load(Ordering::Acquire)
+                    == monitor.handled_epoch.load(Ordering::Acquire)
+            });
+            let status = state.store.index_sync_status()?;
+            if active && caught_up && matches!(&status, IndexSyncStatus::UpToDate { .. }) {
+                return Ok(
+                    serde_json::json!({"state":"up_to_date","mode":"native_monitor","observation_basis":"native_index_sync_status","generation_id":state.store.current_generation_id()?,"recovery_requested":recovery_requested,"waited_ms":started.elapsed().as_millis(),"index_sync":status}),
+                );
+            }
+            if let IndexSyncStatus::Failed { reason, .. } = &status {
+                if active && (!recovery_requested || started.elapsed() >= Duration::from_secs(30)) {
+                    return Err(VrgError::Conflict(format!(
+                        "native monitor synchronization failed: {reason}"
+                    )));
+                }
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(VrgError::Conflict("native monitor synchronization is still pending after 60 seconds; no competing full scan was started".into()));
+            }
+            drop(state);
+            if !active {
+                self.start_change_monitor()?;
+                recovery_requested = true;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+    }
+
     pub fn sync_on_stop(&self, event_key: &str) -> VrgResult<StopSyncOutcome> {
         self.start_change_monitor()?;
         let mut state = self.lock_state()?;
@@ -324,7 +470,10 @@ impl VrgEngine {
             state.store.monitor_is_active()?
         };
         if monitor_caught_up
-            && matches!(state.store.index_sync_status()?, IndexSyncStatus::UpToDate { checked_unix_ms, .. } if unix_ms().saturating_sub(checked_unix_ms) < 60_000)
+            && matches!(
+                state.store.index_sync_status()?,
+                IndexSyncStatus::UpToDate { .. }
+            )
         {
             let current = state.store.current_generation_id()?;
             state.store.set_index_sync_status(
@@ -449,7 +598,7 @@ impl VrgEngine {
             None,
             event_key,
         )?;
-        match indexer::index(&state.config, &state.store, state.embedder.as_ref()) {
+        match index_from_events(state, event_key.is_none()) {
             Ok(report) => {
                 state.semantic_status = report.semantic_status.clone();
                 state.store.finish_index_sync(
@@ -508,13 +657,32 @@ impl VrgEngine {
 
     pub fn search_with_policy(
         &self,
+        request: SearchRequest,
+        allow_stale: bool,
+    ) -> VrgResult<SearchResponse> {
+        self.search_scoped_with_policy(request, allow_stale, None)
+    }
+
+    pub fn search_scoped_with_policy(
+        &self,
         mut request: SearchRequest,
         allow_stale: bool,
+        context_source: Option<&SourceRef>,
     ) -> VrgResult<SearchResponse> {
         self.start_change_monitor()?;
         let (sync_state, sync_reason) = self.refresh_if_needed(allow_stale)?;
         let state = self.lock_state()?;
+        if context_source.is_some() && state.config.adaptive_memory.enabled {
+            return Err(VrgError::InvalidConfig(
+                "context-scoped search does not support adaptive response budgets".into(),
+            ));
+        }
         if matches!(&sync_state, SearchSyncState::Disabled) {
+            if context_source.is_some() {
+                return Err(VrgError::AccessDenied(
+                    "context source is unavailable or not current".into(),
+                ));
+            }
             return Ok(SearchResponse {
                 generation_id: None,
                 sync_state,
@@ -558,44 +726,63 @@ impl VrgEngine {
                 .collect(),
             None => authorized,
         });
+        let context_revision = if let Some(context) = context_source {
+            if !request
+                .root_ids
+                .as_ref()
+                .is_some_and(|roots| roots.contains(&context.root_id))
+            {
+                return Err(VrgError::AccessDenied(
+                    "context source is unavailable or not current".into(),
+                ));
+            }
+            let current = vault::read_source(
+                &state.config,
+                &context.root_id,
+                &context.relative_path,
+                4 * 1024 * 1024,
+            )
+            .map_err(|_| {
+                VrgError::AccessDenied("context source is unavailable or not current".into())
+            })?;
+            let indexed = state.store.load_document(context)?;
+            if !indexed.is_some_and(|document| document.revision == current.revision) {
+                return Err(VrgError::AccessDenied(
+                    "context source is unavailable or not current".into(),
+                ));
+            }
+            Some(current.revision)
+        } else {
+            None
+        };
         let access_cache =
             std::cell::RefCell::new(std::collections::BTreeMap::<SourceRef, Option<String>>::new());
         let authorize = |source: &SourceRef, revision: &str| {
             if let Some(current) = access_cache.borrow().get(source) {
                 return current.as_deref() == Some(revision);
             }
-            let current = vault::read_source(
-                &state.config,
-                &source.root_id,
-                &source.relative_path,
-                4 * 1024 * 1024,
-            )
-            .ok()
-            .map(|doc| doc.revision);
+            let current = vault::current_revision(&state.config, source).ok();
             let allowed = current.as_deref() == Some(revision);
             access_cache.borrow_mut().insert(source.clone(), current);
             allowed
         };
-        let mut response = retrieval::retrieve_authorized(
+        let code_first = context_source.is_none()
+            && crate::projection::updates::direct_sources_enabled(&state.config)?;
+        let mut response = retrieval::retrieve_authorized_scoped_with_policy(
             &state.store,
             state.embedder.as_ref(),
             &request,
             &authorize,
+            context_source,
+            code_first,
         )?;
         // Recheck source policy and exact revision even when stale retrieval was requested.
         // Revocation cannot be bypassed through an old index, graph or summary.
         let mut checked = std::collections::BTreeMap::new();
         response.hits.retain_mut(|hit| {
-            let current = checked.entry(hit.source.clone()).or_insert_with(|| {
-                vault::read_source(
-                    &state.config,
-                    &hit.source.root_id,
-                    &hit.source.relative_path,
-                    4 * 1024 * 1024,
-                )
-                .ok()
-                .map(|d| d.revision)
-            });
+            let current = checked
+                .entry(hit.source.clone())
+                .or_insert_with(|| vault::current_revision(&state.config, &hit.source).ok());
             if current.as_deref() != Some(hit.revision.as_str()) {
                 return false;
             }
@@ -603,6 +790,22 @@ impl VrgEngine {
                 .retain(|edge| edge_authorized(&state.config, &state.store, edge));
             true
         });
+        // This is deliberately a new capability read, not access_cache:
+        // revoking or editing the hub while ranking invalidates the response.
+        if let (Some(context), Some(expected)) = (context_source, context_revision.as_ref()) {
+            let current = vault::read_source(
+                &state.config,
+                &context.root_id,
+                &context.relative_path,
+                4 * 1024 * 1024,
+            )
+            .map_err(|_| VrgError::AccessDenied("context source changed during search".into()))?;
+            if &current.revision != expected {
+                return Err(VrgError::AccessDenied(
+                    "context source changed during search".into(),
+                ));
+            }
+        }
         response.sync_state = sync_state;
         response.sync_reason = sync_reason;
         Ok(response)
@@ -624,20 +827,12 @@ impl VrgEngine {
             .monitor
             .as_ref()
             .map(|monitor| monitor.handled_epoch.load(Ordering::Acquire));
-        let monitor_ready = matches!(&state.monitor_status, ModuleStatus::Ready)
+        let monitor_ready = state.monitor.is_some()
+            && matches!(&state.monitor_status, ModuleStatus::Ready)
             || state.store.monitor_is_active()?;
         let index_status = state.store.index_sync_status()?;
-        let status_recent = matches!(
-            index_status,
-            IndexSyncStatus::UpToDate { checked_unix_ms, .. }
-                if unix_ms().saturating_sub(checked_unix_ms) < 60_000
-        );
-        let periodic_reconcile_due =
-            unix_ms().saturating_sub(state.last_reconcile_unix_ms) >= 60_000;
-        let needs_reconcile = !monitor_ready
-            || current_epoch != handled_epoch
-            || !status_recent
-            || periodic_reconcile_due && state.monitor.is_some();
+        let status_current = matches!(index_status, IndexSyncStatus::UpToDate { .. });
+        let needs_reconcile = !monitor_ready || current_epoch != handled_epoch || !status_current;
         if !needs_reconcile {
             return Ok((SearchSyncState::Ready, None));
         }
@@ -737,7 +932,15 @@ impl VrgEngine {
         max_bytes: usize,
     ) -> VrgResult<SourceDocument> {
         let state = self.lock_state()?;
-        vault::read_source(&state.config, root_id, relative_path, max_bytes)
+        if state.config.projection_invalidation.is_none() {
+            return vault::read_source(&state.config, root_id, relative_path, max_bytes);
+        }
+        let document = vault::read_source(&state.config, root_id, relative_path, max_bytes)?;
+        let verified = vault::read_source(&state.config, root_id, relative_path, max_bytes)?;
+        if verified.revision != document.revision {
+            return Err(VrgError::Conflict("source changed during read".into()));
+        }
+        Ok(verified)
     }
 
     pub fn neighbors(&self, source: &SourceRef, limit: usize) -> VrgResult<Vec<GraphEdge>> {
@@ -748,18 +951,21 @@ impl VrgEngine {
             ));
         }
         let state = self.lock_state()?;
-        // Authorize the requested node before touching any historical relation.
+        if !state.config.roots.iter().any(|root| root.id == source.root_id) {
+            return Err(VrgError::AccessDenied("root ID is not configured".into()));
+        }
+        // An absent node has no relations. Do not probe an excluded source on disk.
+        let Some(indexed) = state.store.load_document(source)? else {
+            return Ok(Vec::new());
+        };
+        // Authorize an indexed node before touching any historical relation.
         let current = vault::read_source(
             &state.config,
             &source.root_id,
             &source.relative_path,
             4 * 1024 * 1024,
         )?;
-        if !state
-            .store
-            .load_document(source)?
-            .is_some_and(|indexed| indexed.revision == current.revision)
-        {
+        if indexed.revision != current.revision {
             return Err(VrgError::Conflict(
                 "graph source revision changed; reconcile before reading".into(),
             ));
@@ -794,17 +1000,41 @@ impl VrgEngine {
         budget: crate::adaptive::Budget,
         allow_stale: bool,
     ) -> VrgResult<crate::adaptive::BudgetedResponse> {
+        {
+            let state = self.lock_state()?;
+            if state.config.projection_invalidation.is_some()
+                && !crate::projection::updates::automatic_memory_enabled(&state.config)?
+            {
+                return Err(VrgError::InvalidConfig("projection invalidation does not support response budgets without pinned automatic-memory authorization".into()));
+            }
+        }
         let query = request.query.clone();
         let response = self.search_with_policy(request, allow_stale)?;
         let state = self.lock_state()?;
         let raw = state.store.load_adaptive_state()?;
         let memories = crate::adaptive::load_memories(raw.as_deref())?;
         let (project_id, privacy_scope_id) = adaptive_scope(&state.config)?;
+        // The native budgeter can only select memories whose complete source
+        // set is already visible. Do not authorize unrelated project memories.
+        let visible = response
+            .hits
+            .iter()
+            .map(|hit| {
+                (
+                    crate::adaptive::source_id(&hit.source),
+                    hit.revision.clone(),
+                )
+            })
+            .collect::<std::collections::BTreeSet<_>>();
         let memories = memories
             .into_iter()
             .filter(|memory| {
                 memory.project_id == project_id
                     && memory.privacy_scope_id == privacy_scope_id
+                    && !memory.sources.is_empty()
+                    && memory.sources.iter().all(|span| {
+                        visible.contains(&(span.source_id.clone(), span.revision_sha256.clone()))
+                    })
                     && memory.sources.iter().all(|span| {
                         source_from_memory_id(&span.source_id).is_some_and(|source| {
                             vault::read_source(
@@ -822,6 +1052,38 @@ impl VrgEngine {
     }
 
     /// Passive facts only; no classification is fabricated when Codex has not proposed it.
+    pub fn index_work_status(&self) -> VrgResult<Option<serde_json::Value>> {
+        #[derive(serde::Deserialize, serde::Serialize)]
+        #[serde(deny_unknown_fields)]
+        struct Receipt {
+            generation_id: Option<String>,
+            unix_ns: String,
+            indexed: usize,
+            unchanged: usize,
+            work: crate::contracts::IndexWork,
+        }
+        let state = self.lock_state()?;
+        let path = state.config.data_dir.join("last-index-work.json");
+        let metadata = match std::fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > 32768 {
+            return Err(VrgError::AccessDenied("invalid index work receipt".into()));
+        }
+        let receipt: Receipt = serde_json::from_slice(&std::fs::read(path)?)
+            .map_err(|_| VrgError::Storage("invalid index work receipt".into()))?;
+        serde_json::to_value(receipt)
+            .map(Some)
+            .map_err(|error| VrgError::Storage(error.to_string()))
+    }
+
+    pub fn projection_update_status(&self) -> VrgResult<Option<serde_json::Value>> {
+        let state = self.lock_state()?;
+        crate::projection::updates::pending_review(&state.config)
+    }
+
     pub fn adaptive_status(&self) -> VrgResult<serde_json::Value> {
         let state = self.lock_state()?;
         let raw = state.store.load_adaptive_state()?;
@@ -1097,30 +1359,30 @@ fn change_worker(
         };
         let current_epoch = epoch.load(Ordering::Acquire);
         let dirty = current_epoch != handled_epoch.load(Ordering::Acquire);
+        if dirty && signalled && handled_epoch.load(Ordering::Acquire) != 0 {
+            let Ok(pending) = signal.0.lock() else {
+                return;
+            };
+            // The predicate remains true until timeout, even across notifications.
+            let Ok((mut pending, _)) =
+                signal
+                    .1
+                    .wait_timeout_while(pending, Duration::from_secs(30), |_| true)
+            else {
+                return;
+            };
+            *pending = false;
+        }
         let Ok(mut state) = state_arc.lock() else {
             continue;
         };
-        let periodic = unix_ms().saturating_sub(state.last_reconcile_unix_ms) >= 60_000;
-        if !(dirty && signalled || timeout.timed_out() && periodic) || state.config.roots.is_empty()
-        {
+        if !(dirty && (signalled || timeout.timed_out())) || state.config.roots.is_empty() {
             continue;
-        }
-        if dirty {
-            thread::sleep(Duration::from_millis(250));
         }
         let observed = epoch.load(Ordering::Acquire);
         let Ok(Some(_sync_lock)) = state.store.try_sync_lock() else {
             continue;
         };
-        // A recently published status cannot cover changes made while no
-        // watcher was running. First reconcile once in this process before
-        // treating a recent status as evidence that the monitor has caught up.
-        if state.last_reconcile_unix_ms != 0
-            && matches!(state.store.index_sync_status(), Ok(IndexSyncStatus::UpToDate { checked_unix_ms, .. }) if unix_ms().saturating_sub(checked_unix_ms) < 60_000)
-        {
-            handled_epoch.store(observed, Ordering::Release);
-            continue;
-        }
         let event_key = format!("watch:{}:{}", std::process::id(), observed);
         let parent = state.store.current_generation_id().ok().flatten();
         let change_revision = state.store.source_change_revision().unwrap_or_default();
@@ -1131,7 +1393,7 @@ fn change_worker(
             None,
             Some(&event_key),
         );
-        match indexer::index(&state.config, &state.store, state.embedder.as_ref()) {
+        match index_from_events(&mut state, false) {
             Ok(report) => {
                 state.semantic_status = report.semantic_status;
                 let _ = state.store.finish_index_sync(
@@ -1171,27 +1433,16 @@ fn source_from_memory_id(id: &str) -> Option<SourceRef> {
 
 fn edge_authorized(config: &VrgConfig, store: &DerivedStore, edge: &GraphEdge) -> bool {
     // Incoming edges carry facts asserted by `from`, even when a result is for `to`.
-    let Ok(author) = vault::read_source(
-        config,
-        &edge.from.root_id,
-        &edge.from.relative_path,
-        4 * 1024 * 1024,
-    ) else {
+    let Ok(author) = vault::current_revision(config, &edge.from) else {
         return false;
     };
     let indexed = store.load_document(&edge.from).ok().flatten();
-    if !indexed.is_some_and(|doc| doc.revision == author.revision) {
+    if !indexed.is_some_and(|document| document.revision == author) {
         return false;
     }
-    edge.to.as_ref().is_some_and(|target| {
-        vault::read_source(
-            config,
-            &target.root_id,
-            &target.relative_path,
-            4 * 1024 * 1024,
-        )
-        .is_ok()
-    })
+    edge.to
+        .as_ref()
+        .is_some_and(|target| vault::current_revision(config, target).is_ok())
 }
 
 fn require_adaptive(config: &VrgConfig) -> VrgResult<()> {
@@ -1203,7 +1454,7 @@ fn require_adaptive(config: &VrgConfig) -> VrgResult<()> {
     Ok(())
 }
 
-fn adaptive_scope(config: &VrgConfig) -> VrgResult<(String, String)> {
+pub(crate) fn adaptive_scope(config: &VrgConfig) -> VrgResult<(String, String)> {
     use sha2::{Digest, Sha256};
     // Local scope identity, not a permission grant. Canonical roots and filenames
     // separate revoked/reconfigured profiles; the source reader remains authoritative.
@@ -1278,4 +1529,39 @@ fn derived_disk_bytes(path: &std::path::Path) -> VrgResult<u64> {
         Err(e) => return Err(e.into()),
     }
     Ok(total)
+}
+
+fn index_from_events(state: &mut EngineState, force_full: bool) -> VrgResult<IndexReport> {
+    let changes = match &state.monitor {
+        Some(monitor) => {
+            let mut pending = monitor
+                .changes
+                .lock()
+                .map_err(|_| VrgError::Storage("source event queue poisoned".into()))?;
+            std::mem::take(&mut *pending)
+        }
+        None => SourceChanges {
+            full: true,
+            paths: BTreeSet::new(),
+        },
+    };
+    let result = if force_full || changes.full {
+        indexer::index(&state.config, &state.store, state.embedder.as_ref())
+    } else {
+        indexer::index_paths(
+            &state.config,
+            &state.store,
+            state.embedder.as_ref(),
+            &changes.paths,
+        )
+    };
+    if result.is_err() {
+        if let Some(monitor) = &state.monitor {
+            if let Ok(mut pending) = monitor.changes.lock() {
+                pending.full |= changes.full;
+                pending.paths.extend(changes.paths);
+            }
+        }
+    }
+    result
 }

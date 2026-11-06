@@ -274,19 +274,15 @@ impl ArchiveStore {
         ))
     }
 
-    /// Passive viewer access: never creates directories, leases or changes permissions.
+    /// Passive viewer access: never creates directories or changes permissions.
     #[cfg(unix)]
     pub fn open_existing(store: &Path) -> VrgResult<Self> {
         use rustix::fs::{Mode, OFlags, openat};
         let root = open_canonical_directory(store)?;
         let dir = File::from(
-            openat(
-                &root,
-                "cold",
-                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-                Mode::empty(),
-            )
-            .map_err(io_error)?,
+            openat(&root, "cold",
+                   OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                   Mode::empty()).map_err(io_error)?,
         );
         Ok(Self { dir })
     }
@@ -309,12 +305,8 @@ impl ArchiveStore {
                 return Err(invalid("archive catalog exceeds limit"));
             }
             let name = entry?.file_name();
-            let Some(name) = name.to_str() else {
-                continue;
-            };
-            let Some(id) = name.strip_suffix(".arc").filter(|id| valid_hash(id)) else {
-                continue;
-            };
+            let Some(name) = name.to_str() else { continue; };
+            let Some(id) = name.strip_suffix(".arc").filter(|id| valid_hash(id)) else { continue; };
             let record: ArchiveRecord =
                 serde_json::from_slice(&self.read_file(name, MAX_MANIFEST_BYTES)?)
                     .map_err(|_| invalid("invalid archive membership manifest"))?;
@@ -451,7 +443,7 @@ impl ArchiveStore {
         self.restore_bounded(scope, source_id, revision, MAX_OBJECT_BYTES)
     }
 
-    /// Viewer restoration imposes a stricter expansion bound before decompression.
+    /// Viewer restoration applies its expansion limit before decompression.
     pub fn restore_bounded(
         &self,
         scope: &str,

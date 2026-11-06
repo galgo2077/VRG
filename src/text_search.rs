@@ -1,7 +1,7 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
-    contracts::{MatchKind, SearchCandidate},
+    contracts::{MatchKind, SearchCandidate, SourceRef},
     error::VrgResult,
     storage::DerivedStore,
 };
@@ -16,6 +16,13 @@ pub fn search(
     root_ids: Option<&[String]>,
     limit: usize,
 ) -> VrgResult<Vec<SearchCandidate>> {
+    search_scoped(store, query, root_ids, limit, None)
+}
+
+pub fn search_scoped(
+    store: &DerivedStore, query: &str, root_ids: Option<&[String]>, limit: usize,
+    sources: Option<&BTreeSet<SourceRef>>,
+) -> VrgResult<Vec<SearchCandidate>> {
     let query = query.trim();
     if query.is_empty() || limit == 0 {
         return Ok(Vec::new());
@@ -23,8 +30,8 @@ pub fn search(
 
     let bounded_limit = limit.min(MAX_RESULTS);
     let roots = root_ids.unwrap_or(&[]);
-    let exact = store.exact_search_rows(query, roots, bounded_limit)?;
-    let lexical = store.fts_search_rows(query, roots, bounded_limit)?;
+    let exact = store.exact_search_rows_scoped(query, roots, bounded_limit, sources)?;
+    let lexical = store.fts_search_rows_scoped(query, roots, bounded_limit, sources)?;
     let mut merged = BTreeMap::<String, SearchCandidate>::new();
 
     for candidate in exact.into_iter().chain(lexical) {
